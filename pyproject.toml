@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=67.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gendoc"
+version = "0.1.0"
+description = "GenDoc prototype for layered AI-assisted documentation."
+readme = "README.md"
+authors = [
+  { name = "Marco Betti", email = "marco@example.com" },
+  { name = "Contributors" }
+]
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.14.0"
+]
+
+[project.scripts]
+gendoc = "gendoc.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

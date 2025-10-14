@@ -1,0 +1,59 @@
+{
+  "main.py::Task": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::bootstrap_demo_list": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::Task::mark_done": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList::__init__": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList::add": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList::pending": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList::completed": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "main.py::TaskList::completion_ratio": [
+    {
+      "path": "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md",
+      "excerpt": "# Demo App\n\nThis sample shows a minimal task manager with Task and TaskList abstractions.\n"
+    }
+  ],
+  "_doc_sources": [
+    "C:\\Users\\Marco\\Desktop\\GenDoc\\GenDoc\\samples\\demo_app\\README.md"
+  ]
+}
