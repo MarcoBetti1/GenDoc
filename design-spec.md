@@ -1,7 +1,7 @@
 # GenDoc v0.1 Design Spec
 
 ## Architectural Overview
-GenDoc orchestrates a multi-pass documentation workflow composed of four core subsystems:
+GenDoc orchestrates a multi-pass documentation workflow composed of five core subsystems:
 
 1. **Intake & Structural Mapping**
    - Discovers source files, applies ignore rules, and builds a hierarchical tree of modules, classes, and functions.
@@ -23,6 +23,11 @@ GenDoc orchestrates a multi-pass documentation workflow composed of four core su
    - Produces a final Markdown artifact that begins at the highest abstraction layer and drills down, embedding links to low-level notes.
    - Emits supplemental JSON/Markdown files capturing the grouping decisions, prompt ledger, and cross-reference map linking generated sections to code and existing docs.
 
+5. **Goal Derivation & Editorial Refinement**
+   - Synthesizes section-level summaries into an explicit project goal statement using a higher-context model.
+   - Revisits each section with the derived goal, pruning details that do not advance the overarching objective and optionally omitting irrelevant sections entirely.
+   - Records the final goal alongside cross-reference metadata so downstream consumers can trace why a section was retained.
+
 ## Key Modules
 - `analysis.ProjectAnalyzer`: Handles file discovery, dependency graph construction, AST inspection, and code element extraction.
 - `existing_docs.ExistingDocsCollector`: Finds supplemental documentation, ranks relevance, and associates snippets with code elements.
@@ -40,7 +45,7 @@ GenDoc orchestrates a multi-pass documentation workflow composed of four core su
 | Code Element Notes | Markdown per element | Ultra low-level narration with code excerpts |
 | Module Summaries | Markdown/JSON | Contextual role narratives referencing child elements |
 | Project Overview | Markdown | Final human-facing narrative |
-| Cross-Reference Map | JSON | Links generated sections to code paths and existing documentation |
+| Cross-Reference Map | JSON | Links generated sections to code paths, existing documentation, and the derived project goal |
 | Run Manifest | JSON | Records config values, timestamps, LLM provider, cost estimates |
 
 ## Prompt Workflow
@@ -59,6 +64,12 @@ GenDoc orchestrates a multi-pass documentation workflow composed of four core su
 5. **Synthesis Prompt**
    - Inputs: Collection of contextual summaries.
    - Outputs: Higher-level narrative suitable for top-level documentation.
+6. **Project Goal Prompt**
+   - Inputs: All section summaries (post-review).
+   - Outputs: Concise goal statement describing the repository’s purpose.
+7. **Relevance Filter Prompt**
+   - Inputs: Project goal, section metadata, and section content.
+   - Outputs: Refined section text containing only goal-aligned details or an `OMIT` directive if irrelevant.
 
 All prompts must carry a `role` tag (`analyst`, `reviewer`, `synthesizer`, etc.) to aid audit trails and future fine-tuning.
 

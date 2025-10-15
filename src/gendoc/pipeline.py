@@ -28,6 +28,7 @@ class RunSummary:
     existing_doc_count: int
     ledger_path: Path
     cross_reference_path: Path
+    project_goal: str
 
 
 class Pipeline:
@@ -56,10 +57,14 @@ class Pipeline:
         structure = self._analyzer.analyze()
         existing_docs = self._docs_collector.collect() if self._config.use_existing_docs else {}
         element_sections = self._document_elements(structure.elements, existing_docs)
-        synthesis_section = self._synthesize(structure, element_sections)
-        cross_reference_path = self._write_cross_reference(existing_docs, element_sections)
-        sections = element_sections + [synthesis_section]
-        self._write_output(sections)
+        project_goal = self._derive_project_goal(element_sections)
+        refined_sections = self._refine_sections(element_sections, project_goal)
+        if not refined_sections:
+            refined_sections = element_sections
+        synthesis_section = self._synthesize(structure, refined_sections, project_goal)
+        cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
+        sections = refined_sections + [synthesis_section]
+        self._write_output(project_goal, sections)
 
         summary = RunSummary(
             sections=sections,
@@ -67,6 +72,7 @@ class Pipeline:
             existing_doc_count=len(existing_docs),
             ledger_path=self._config.ledger_path or (self._config.output_path.parent / "prompt-ledger.jsonl"),
             cross_reference_path=cross_reference_path,
+            project_goal=project_goal,
         )
         logger.info("GenDoc pipeline finished: %d elements", summary.element_count)
         return summary
@@ -128,13 +134,39 @@ class Pipeline:
                 related.append((path, excerpt))
         return related
 
-    def _synthesize(self, structure: ProjectStructure, element_sections: List[Section]) -> Section:
+    def _derive_project_goal(self, sections: List[Section]) -> str:
+        summaries = [section.body for section in sections if section.body.strip()]
+        if not summaries:
+            return "Project goal unavailable."
+        goal = self._orchestrator.derive_project_goal(section_summaries=summaries).strip()
+        return goal or "Project goal unavailable."
+
+    def _refine_sections(self, sections: List[Section], goal: str) -> List[Section]:
+        refined: list[Section] = []
+        for section in sections:
+            refined_text = self._orchestrator.refine_section(
+                section_body=section.body,
+                goal=goal,
+                metadata=section.metadata,
+            ).strip()
+            if not refined_text or refined_text.lower().startswith("omit"):
+                continue
+            refined.append(
+                Section(
+                    title=section.title,
+                    body=refined_text,
+                    metadata=section.metadata,
+                )
+            )
+        return refined
+
+    def _synthesize(self, structure: ProjectStructure, element_sections: List[Section], goal: str) -> Section:
         summaries = [section.body for section in element_sections]
-        metadata = {"element_count": len(element_sections), "tree": structure.tree_repr}
+        metadata = {"element_count": len(element_sections), "tree": structure.tree_repr, "project_goal": goal}
         combined = self._orchestrator.synthesize(summaries=summaries, metadata=metadata)
         return Section(title="Project Overview", body=combined, metadata=metadata)
 
-    def _write_cross_reference(self, existing_docs: Dict[Path, str], sections: List[Section]) -> Path:
+    def _write_cross_reference(self, existing_docs: Dict[Path, str], sections: List[Section], goal: str) -> Path:
         cross_ref = {}
         for section in sections:
             supplemental = section.metadata.get("supplemental_docs", [])
@@ -142,12 +174,13 @@ class Pipeline:
                 cross_ref[section.title] = supplemental
         if existing_docs:
             cross_ref["_doc_sources"] = [str(path) for path in existing_docs.keys()]
+        cross_ref["_project_goal"] = goal
         output_path = self._config.output_path.parent / "cross-reference.json"
         output_path.write_text(json.dumps(cross_ref, indent=2), encoding="utf-8")
         return output_path
 
-    def _write_output(self, sections: List[Section]) -> None:
-        lines: list[str] = ["# GenDoc Prototype Output", ""]
+    def _write_output(self, goal: str, sections: List[Section]) -> None:
+        lines: list[str] = ["# GenDoc Prototype Output", "", "## Project Goal", "", goal.strip() or "Project goal unavailable.", ""]
         for section in sections:
             lines.append(f"## {section.title}")
             lines.append("")

@@ -1,0 +1,8 @@
+.venv/
+
+.env
+docs/generated/
+docs/generated-llmchess/
+
+*/__pycache__/
+

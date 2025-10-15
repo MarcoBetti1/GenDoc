@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+src/gendoc/__init__.py
+src/gendoc/__main__.py
+src/gendoc/analysis.py
+src/gendoc/cli.py
+src/gendoc/config.py
+src/gendoc/existing_docs.py
+src/gendoc/pipeline.py
+src/gendoc/prompting.py
+src/gendoc.egg-info/PKG-INFO
+src/gendoc.egg-info/SOURCES.txt
+src/gendoc.egg-info/dependency_links.txt
+src/gendoc.egg-info/entry_points.txt
+src/gendoc.egg-info/requires.txt
+src/gendoc.egg-info/top_level.txt

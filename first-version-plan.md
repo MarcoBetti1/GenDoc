@@ -36,7 +36,10 @@ Deliver a demonstrable prototype that ingests a smaller repository and produces 
 4. **Hierarchical Synthesis**
    - Iterate upward by merging related purpose statements into module/component briefs, then subsystem narratives.
    - Maintain traceability from high-level statements back to the underlying notes to support revisions and permit targeted re-prompts when discrepancies appear.
-5. **Assembly & Export**
+5. **Project Goal Derivation & Editorial Pass**
+   - Feed section summaries into a higher-context agent to articulate the overarching project goal.
+   - Re-run each section through a relevance filter that trims or omits content inconsistent with the goal.
+6. **Assembly & Export**
    - Organize outputs into Markdown: start with the highest abstraction, then embed/append the subordinate layers.
    - Emit all intermediate artifacts plus a run manifest (inputs, timestamps, prompt templates, grouping decisions).
 
@@ -61,6 +64,7 @@ Deliver a demonstrable prototype that ingests a smaller repository and produces 
    - Orchestrate flow: structure heuristics → per-element notes → contextual roll-ups → global synopsis, with agents delegating between passes.
    - Implement the ability to revisit lower levels when higher-level prompts indicate missing detail, including targeted re-prompts that incorporate reviewer feedback.
    - Blend existing documentation snippets where helpful and annotate provenance in outputs.
+   - Add goal synthesis and relevance-filtering prompts to refine or drop sections before export.
    - Assemble Markdown using templates that expose the hierarchy and cite reviewer/batching decisions where relevant.
 5. **CLI Entry Point** (Day 4)
    - `gendoc run --repo samples/demo-app --out docs/generated.md` style command.
@@ -82,7 +86,7 @@ Deliver a demonstrable prototype that ingests a smaller repository and produces 
 
 ## Immediate Next Actions
 - Choose the sample project (language + repository).
-- Define initial prompt templates for ultra low-level, contextual purpose, synthesis, reviewer/critic, and sanity-check passes.
+- Define initial prompt templates for ultra low-level, contextual purpose, synthesis, reviewer/critic, goal synthesis, relevance filtering, and sanity-check passes.
 - Draft repository structure and initialize version control settings.
 - Enumerate required environment variables and dependencies for onboarding.
 - Outline heuristics for LLM-guided grouping, criteria for when to recurse back into lower levels, and rules for blending optional existing documentation with code-derived insight.
