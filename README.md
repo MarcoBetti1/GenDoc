@@ -19,12 +19,19 @@ python -m venv .venv
 pip install -e .
 ```
 
-### 3. Run the CLI against the bundled sample project
+### 3. Generate layered documentation
 ```powershell
 gendoc run --repo samples/demo_app --out docs/generated/demo-output.md
 ```
 
-The default run uses a mock LLM so the pipeline can execute without external credentials. To enable real OpenAI calls later, set the environment variables referenced in `docs/prototype-notes.md` and pass `--llm-provider openai`.
+The default run uses a mock LLM so the pipeline can execute without external credentials. To create production-strength docs for the chess harness sample with the real OpenAI API, provide an API key and run:
+
+```powershell
+$Env:OPENAI_API_KEY = "sk-..."
+gendoc run --repo samples/llmchess --out docs/generated/demo-output.md --llm-provider openai
+```
+
+Each run produces a polished Markdown overview plus supporting artefacts (`cross-reference.json`, `prompt-ledger.jsonl`, and per-run assets under `docs/generated/artefacts/`).
 
 ## Key CLI Flags
 - `--use-existing-docs`: Blend in any Markdown/RST files from the repo as supplemental context.
@@ -45,9 +52,5 @@ GenDoc/
 ```
 
 ## Next Steps
-- Flesh out the analysis layer to support deeper language features.
 - Implement real OpenAI prompt calls with retry logic and cost accounting.
 - Expand the demo suite with multilingual or framework-specific repositories.
-
-## License
-TBD

@@ -28,6 +28,7 @@ class RunSummary:
     existing_doc_count: int
     ledger_path: Path
     cross_reference_path: Path
+    document_path: Path
     project_goal: str
 
 
@@ -61,17 +62,17 @@ class Pipeline:
         refined_sections = self._refine_sections(element_sections, project_goal)
         if not refined_sections:
             refined_sections = element_sections
-        synthesis_section = self._synthesize(structure, refined_sections, project_goal)
         cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
-        sections = refined_sections + [synthesis_section]
-        self._write_output(project_goal, sections)
+        document_text = self._compose_document(structure, refined_sections, project_goal)
+        self._write_output(document_text)
 
         summary = RunSummary(
-            sections=sections,
+            sections=refined_sections,
             element_count=len(structure.elements),
             existing_doc_count=len(existing_docs),
             ledger_path=self._config.ledger_path or (self._config.output_path.parent / "prompt-ledger.jsonl"),
             cross_reference_path=cross_reference_path,
+            document_path=self._config.output_path,
             project_goal=project_goal,
         )
         logger.info("GenDoc pipeline finished: %d elements", summary.element_count)
@@ -160,12 +161,6 @@ class Pipeline:
             )
         return refined
 
-    def _synthesize(self, structure: ProjectStructure, element_sections: List[Section], goal: str) -> Section:
-        summaries = [section.body for section in element_sections]
-        metadata = {"element_count": len(element_sections), "tree": structure.tree_repr, "project_goal": goal}
-        combined = self._orchestrator.synthesize(summaries=summaries, metadata=metadata)
-        return Section(title="Project Overview", body=combined, metadata=metadata)
-
     def _write_cross_reference(self, existing_docs: Dict[Path, str], sections: List[Section], goal: str) -> Path:
         cross_ref = {}
         for section in sections:
@@ -179,11 +174,22 @@ class Pipeline:
         output_path.write_text(json.dumps(cross_ref, indent=2), encoding="utf-8")
         return output_path
 
-    def _write_output(self, goal: str, sections: List[Section]) -> None:
-        lines: list[str] = ["# GenDoc Prototype Output", "", "## Project Goal", "", goal.strip() or "Project goal unavailable.", ""]
+    def _compose_document(self, structure: ProjectStructure, sections: List[Section], goal: str) -> str:
+        payload: list[dict[str, object]] = []
         for section in sections:
-            lines.append(f"## {section.title}")
-            lines.append("")
-            lines.append(section.body)
-            lines.append("")
-        self._config.output_path.write_text("\n".join(lines), encoding="utf-8")
+            entry: dict[str, object] = {"title": section.title, "summary": section.body}
+            for key in ("identifier", "kind", "path", "dependencies"):
+                value = section.metadata.get(key)
+                if value:
+                    entry[key] = value
+            payload.append(entry)
+        document = self._orchestrator.compose_document(
+            goal=goal,
+            project_tree=structure.tree_repr,
+            repo_name=self._config.repo_path.name,
+            section_payload=payload,
+        )
+        return document.strip()
+
+    def _write_output(self, document: str) -> None:
+        self._config.output_path.write_text(document.strip() + "\n", encoding="utf-8")

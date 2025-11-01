@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Dict, Iterable, Optional, Protocol
+from typing import Any, Dict, Iterable, List, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,9 @@ class MockLLM:
 
         if "Combine the following component summaries" in user_prompt:
             return self._combine_summaries(user_prompt)
+
+        if "Produce a standalone Markdown document" in user_prompt:
+            return self._compose_document_overview(user_prompt)
 
         lines = [line.strip() for line in user_prompt.splitlines() if line.strip()]
         if not lines:
@@ -339,6 +342,103 @@ class MockLLM:
             f"This overview weaves together {count_text} focused summaries across {module_phrase} to support the goal of {goal_text}."
         )
 
+    def _compose_document_overview(self, prompt: str) -> str:
+        goal = self._extract_between(prompt, "Project goal:", "Repository name:") or "Project goal unavailable."
+        repo = self._extract_between(prompt, "Repository name:", "Project tree:") or "Repository"
+        tree = self._extract_between(prompt, "Project tree:", "Section digests (JSON):") or ""
+        sections_json = self._extract_between(prompt, "Section digests (JSON):", "Produce a standalone")
+        sections: list[dict[str, Any]] = []
+        if sections_json:
+            try:
+                sections = json.loads(sections_json)
+            except json.JSONDecodeError:
+                sections = []
+
+        module_counts: dict[str, int] = {}
+        highlight_summaries: list[str] = []
+        for entry in sections:
+            path = entry.get("path") or entry.get("title", "")
+            module = str(path).split("/")[0] if path else "module"
+            module = module or "module"
+            module_counts[module] = module_counts.get(module, 0) + 1
+            summary = entry.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                highlight_summaries.append(summary.strip())
+
+        modules_sorted = sorted(module_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        module_names = [name for name, _ in modules_sorted]
+        module_phrase = self._format_list(module_names, limit=4) if module_names else "the key modules"
+        section_total = sum(module_counts.values()) or len(sections) or 0
+
+        at_a_glance = [
+            f"Mission: {goal.strip().rstrip('.')}.",
+            f"Coverage spans {section_total or 'several'} documented sections across {module_phrase}.",
+            "LLM integration: content composed via the document prompt using structured section summaries.",
+            "Differentiators: persistent prompt ledger and cross-reference artefacts for traceability.",
+        ]
+        if tree.strip():
+            at_a_glance.append("Architecture footprint:\n" + "  " + tree.strip().splitlines()[0])
+        while len(at_a_glance) < 4:
+            at_a_glance.append("Additional insight captured during analysis.")
+        at_a_glance = at_a_glance[:6]
+
+        functional_flow = [
+            "Inspect repository structure and gather code elements for analysis.",
+            "Generate and refine per-element summaries aligned with the project goal.",
+            "Compose the final narrative and export markdown plus traceable artefacts.",
+        ]
+
+        component_sections: list[str] = []
+        for name, count in modules_sorted[:5]:
+            component_sections.append(
+                f"### {name}\n- Summarizes {count} element{'s' if count != 1 else ''} from this module."
+            )
+        if not component_sections:
+            component_sections.append("### Components\n- Summaries highlight core behaviors across the repository.")
+
+        outputs = [
+            "Markdown documentation at the requested output path.",
+            "JSON cross-reference linking sections to supplemental sources.",
+            "Prompt ledger (`prompt-ledger.jsonl`) capturing LLM interactions.",
+        ]
+
+        issues = [
+            "No issues were identified during mock generation; review real LLM output for accuracy.",
+        ]
+
+        lines = [
+            f"# {repo} - Mock Overview",
+            "",
+            "## At a Glance",
+        ]
+        lines.extend(f"- {item}" for item in at_a_glance)
+
+        lines.append("")
+        lines.append("## Functional Flow")
+        for idx, step in enumerate(functional_flow, start=1):
+            lines.append(f"{idx}. {step}")
+
+        lines.append("")
+        lines.append("## Component Breakdown")
+        lines.extend(component_sections)
+
+        lines.append("")
+        lines.append("## Outputs & Observability")
+        lines.extend(f"- {item}" for item in outputs)
+
+        lines.append("")
+        lines.append("## Known Issues & Bugs")
+        lines.extend(f"- {item}" for item in issues)
+
+        return "\n".join(lines).strip() + "\n"
+
+    def _extract_between(self, prompt: str, start_label: str, end_label: str) -> Optional[str]:
+        if start_label not in prompt or end_label not in prompt:
+            return None
+        after = prompt.split(start_label, 1)[1]
+        before = after.split(end_label, 1)[0]
+        return before.strip() or None
+
 
 class OpenAIClient:
     """Thin wrapper around the OpenAI Chat Completions API."""
@@ -380,6 +480,8 @@ class PromptTemplates:
     prompt_goal: str
     system_filter: str
     prompt_filter: str
+    system_document: str
+    prompt_document: str
 
 
 class PromptOrchestrator:
@@ -530,6 +632,36 @@ class PromptOrchestrator:
         )
         return response
 
+    def compose_document(
+        self,
+        *,
+        goal: str,
+        project_tree: str,
+        repo_name: str,
+        section_payload: List[Dict[str, object]],
+    ) -> str:
+        prompt = self._templates.prompt_document.format(
+            goal=goal.strip(),
+            repo=repo_name,
+            tree=project_tree.strip() or "(structure unavailable)",
+            sections=json.dumps(section_payload, ensure_ascii=False, indent=2),
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_document,
+            user_prompt=prompt,
+            metadata={"stage": "document"},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="document",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "document"},
+            )
+        )
+        return response
+
 
 DEFAULT_TEMPLATES = PromptTemplates(
     system_analyst="You are an expert software analyst who explains code precisely.",
@@ -542,4 +674,6 @@ DEFAULT_TEMPLATES = PromptTemplates(
     prompt_goal="""Using the section summaries below, craft a concise yet detailed project goal statement that captures the overall intent of the codebase.\n\nSection summaries:\n{summaries}\n""",
     system_filter="You are an editor who preserves only information relevant to the project goal.",
     prompt_filter="""Project goal:\n{goal}\n\nSection metadata: {metadata}\nSection content:\n{section}\n\nRewrite this section so it only contains information that directly supports the project goal. If the section is irrelevant, respond with 'OMIT'.""",
+    system_document="You are a principal technical writer who produces clear, top-down documentation for engineering stakeholders.",
+    prompt_document="""Project goal:\n{goal}\n\nRepository name: {repo}\nProject tree:\n{tree}\n\nSection digests (JSON):\n{sections}\n\nProduce a standalone Markdown document that explains the repository from high level to implementation. Requirements:\n- Title the document with an H1 that includes the repository name and a concise tagline.\n- Provide a section `## At a Glance` with 4-6 bullets covering mission, architecture, LLM integration, and distinguishing traits.\n- Provide `## Functional Flow` with a numbered sequence describing how the system operates end-to-end.\n- Provide `## Component Breakdown` with subsections for the major modules or services, summarizing responsibilities and collaboration.\n- Provide `## Outputs & Observability` as bullets describing generated artefacts, logs, or metrics.\n- Provide `## Known Issues & Bugs` capturing risks, limitations, or TODOs; if none are apparent, write a single bullet stating that no issues were identified.\n- Avoid referencing the JSON directly; convert insights into prose.\n- Keep the tone confident and instructive, and keep the document concise and scannable.\n""",
 )
