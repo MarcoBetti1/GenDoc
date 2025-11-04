@@ -1,3 +1,0 @@
-{
-  "_project_goal": "Project goal: Provide clear documentation for BatchOrchestrator, EngineOpponent, GameConfig and GameRunner in agent_normalizer.py, batch_orchestrator.py, config.py, engine_opponent.py, game.py, human_opponent.py, llm_client.py, move_validator.py, openai_provider.py, prompting.py, random_opponent.py and referee.py, highlighting how the pieces collaborate."
-}
