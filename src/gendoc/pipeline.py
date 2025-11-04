@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
@@ -30,6 +31,16 @@ class RunSummary:
     cross_reference_path: Path
     document_path: Path
     project_goal: str
+    component_documents: List[Path]
+
+
+@dataclass(slots=True)
+class ComponentDocument:
+    name: str
+    path: Path
+    relative_path: str
+    summary: str
+    content: str
 
 
 class Pipeline:
@@ -64,6 +75,12 @@ class Pipeline:
             refined_sections = element_sections
         cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
         document_text = self._compose_document(structure, refined_sections, project_goal)
+        component_docs = self._generate_component_documents(
+            element_sections=element_sections,
+            goal=project_goal,
+        )
+        if component_docs:
+            document_text = self._integrate_component_docs(document_text, component_docs, project_goal)
         self._write_output(document_text)
 
         summary = RunSummary(
@@ -74,6 +91,7 @@ class Pipeline:
             cross_reference_path=cross_reference_path,
             document_path=self._config.output_path,
             project_goal=project_goal,
+            component_documents=[doc.path for doc in component_docs],
         )
         logger.info("GenDoc pipeline finished: %d elements", summary.element_count)
         return summary
@@ -193,3 +211,96 @@ class Pipeline:
 
     def _write_output(self, document: str) -> None:
         self._config.output_path.write_text(document.strip() + "\n", encoding="utf-8")
+
+    def _generate_component_documents(
+        self,
+        *,
+        element_sections: List[Section],
+        goal: str,
+    ) -> List[ComponentDocument]:
+        if not element_sections:
+            return []
+        component_dir = self._config.output_path.parent / f"{self._config.output_path.stem}_components"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        grouped: Dict[str, List[Section]] = {}
+        for section in element_sections:
+            component_key = str(section.metadata.get("path") or section.title).replace("\\", "/")
+            grouped.setdefault(component_key, []).append(section)
+
+        generated: list[ComponentDocument] = []
+        slug_counts: dict[str, int] = {}
+        repo_name = self._config.repo_path.name
+        for component_key, sections in grouped.items():
+            raw_notes_parts = []
+            for section in sections:
+                raw_notes_parts.append(f"### {section.title}\n{section.body.strip()}")
+            raw_notes = "\n\n".join(raw_notes_parts).strip()
+            if not raw_notes:
+                continue
+            condensed = self._orchestrator.reduce_component_notes(
+                goal=goal,
+                component_name=component_key,
+                raw_notes=raw_notes,
+            ).strip()
+            if not condensed:
+                continue
+            polished = self._orchestrator.polish_component_document(
+                goal=goal,
+                component_name=component_key,
+                repo_name=repo_name,
+                condensed_notes=condensed,
+            ).strip()
+            if not polished:
+                continue
+            slug_base = self._slugify_component(component_key)
+            count = slug_counts.get(slug_base, 0)
+            slug_counts[slug_base] = count + 1
+            filename = f"{slug_base}{'' if count == 0 else f'-{count+1}'}.md"
+            path = component_dir / filename
+            path.write_text(polished + "\n", encoding="utf-8")
+            relative_path = f"{component_dir.name}/{filename}"
+            summary_line = "Further details available."
+            for line in condensed.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.startswith("- "):
+                    stripped = stripped[2:].strip()
+                summary_line = stripped or summary_line
+                break
+            summary_line = summary_line.replace("\\", "/")
+            generated.append(
+                ComponentDocument(
+                    name=component_key,
+                    path=path,
+                    relative_path=relative_path,
+                    summary=summary_line.lstrip("- "),
+                    content=polished,
+                )
+            )
+        return generated
+
+    def _integrate_component_docs(
+        self,
+        document_text: str,
+        component_docs: List[ComponentDocument],
+        goal: str,
+    ) -> str:
+        payload = [
+            {
+                "name": doc.name,
+                "relative_path": doc.relative_path,
+                "summary": doc.summary,
+            }
+            for doc in component_docs
+        ]
+        integrated = self._orchestrator.integrate_component_links(
+            base_document=document_text,
+            component_payload=payload,
+            goal=goal,
+        )
+        return integrated.strip()
+
+    def _slugify_component(self, component_key: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", component_key.strip().lower()).strip("-")
+        return slug or "component"

@@ -87,8 +87,17 @@ class MockLLM:
         if "Combine the following component summaries" in user_prompt:
             return self._combine_summaries(user_prompt)
 
-        if "Produce a standalone Markdown document" in user_prompt:
+        if "Produce a standalone Markdown document" in user_prompt and "Section digests" in user_prompt:
             return self._compose_document_overview(user_prompt)
+
+        if "Overly descriptive notes" in user_prompt and "Component:" in user_prompt:
+            return self._trim_component_notes(user_prompt)
+
+        if "Condensed notes" in user_prompt and "Component:" in user_prompt:
+            return self._polish_component_notes(user_prompt)
+
+        if "Component documents (JSON):" in user_prompt and "Base document:" in user_prompt:
+            return self._integrate_component_section(user_prompt)
 
         lines = [line.strip() for line in user_prompt.splitlines() if line.strip()]
         if not lines:
@@ -439,6 +448,90 @@ class MockLLM:
         before = after.split(end_label, 1)[0]
         return before.strip() or None
 
+    def _trim_component_notes(self, prompt: str) -> str:
+        content = self._extract_between(prompt, "Overly descriptive notes:", "\n\n")
+        if not content:
+            content = prompt.split("Overly descriptive notes:", 1)[-1].strip()
+        entries: list[tuple[str, str]] = []
+        for block in content.split("### "):
+            if not block.strip():
+                continue
+            title, _, remainder = block.partition("\n")
+            title = title.strip()
+            summary_line = ""
+            for raw_line in remainder.splitlines():
+                cleaned = raw_line.strip()
+                if cleaned:
+                    summary_line = cleaned
+                    break
+            entries.append((title, summary_line))
+        if not entries:
+            return "### Essential Responsibilities\n- Essential responsibilities will be extracted from the source summaries."
+        essential_lines = [
+            f"- Focus: {title}" + (f" — {summary}" if summary else "")
+            for title, summary in entries[:5]
+        ]
+        interaction_lines = [
+            f"- Interaction cue: {summary}"
+            for _, summary in entries[5:9]
+            if summary
+        ]
+        sections: list[str] = ["### Essential Responsibilities", *essential_lines]
+        if interaction_lines:
+            sections.append("### Key Interactions")
+            sections.extend(interaction_lines)
+        return "\n".join(sections).strip()
+
+    def _polish_component_notes(self, prompt: str) -> str:
+        component = self._extract_between(prompt, "Component:", "\n") or "Component"
+        notes = self._extract_between(prompt, "Condensed notes:", "\n\n")
+        if not notes:
+            notes = prompt.split("Condensed notes:", 1)[-1].strip()
+        overview_lines = [line.strip("- ") for line in notes.splitlines() if line.strip()]
+        intro = next((line for line in overview_lines if "Focus:" in line), overview_lines[0] if overview_lines else "Purpose pending analysis.")
+        responsibilities = [line for line in overview_lines if line.startswith("Focus:")]
+        interactions = [line for line in overview_lines if "Interaction cue" in line]
+        lines = [
+            f"# {component.strip()} Component Guide",
+            "",
+            "## Overview",
+            intro,
+            "",
+            "## Key Responsibilities",
+        ]
+        if responsibilities:
+            lines.extend(f"- {item}" for item in responsibilities)
+        else:
+            lines.append("- Responsibilities captured during analysis.")
+        lines.extend(["", "## Collaboration Points"])
+        if interactions:
+            lines.extend(f"- {item}" for item in interactions[:5])
+        else:
+            lines.append("- Interacts with surrounding modules as orchestrated by the game runner.")
+        lines.extend(["", "## Implementation Notes", "- Refer to source summaries for concrete behaviors."])
+        return "\n".join(lines).strip() + "\n"
+
+    def _integrate_component_section(self, prompt: str) -> str:
+        base = self._extract_between(prompt, "Base document:", "Component documents (JSON):") or ""
+        components_json = self._extract_between(prompt, "Component documents (JSON):", "Append a new concluding section")
+        if not components_json:
+            components_json = prompt.split("Component documents (JSON):", 1)[-1].split("Append a new concluding section", 1)[0].strip()
+        try:
+            entries = json.loads(components_json)
+        except json.JSONDecodeError:
+            entries = []
+        lines = [base.strip(), "", "## Component Deep Dives"]
+        if not entries:
+            lines.append("- Detailed component documents will be published soon.")
+        else:
+            for entry in entries:
+                name = entry.get("name", "Component")
+                path = entry.get("relative_path", "")
+                summary = entry.get("summary", "Further details available.")
+                link_text = f"[{name}]({path})"
+                lines.append(f"- {link_text}: {summary}")
+        return "\n".join(lines).strip() + "\n"
+
 
 class OpenAIClient:
     """Thin wrapper around the OpenAI Chat Completions API."""
@@ -482,6 +575,12 @@ class PromptTemplates:
     prompt_filter: str
     system_document: str
     prompt_document: str
+    system_component_prune: str
+    prompt_component_prune: str
+    system_component_polish: str
+    prompt_component_polish: str
+    system_document_integrator: str
+    prompt_document_integrator: str
 
 
 class PromptOrchestrator:
@@ -662,6 +761,92 @@ class PromptOrchestrator:
         )
         return response
 
+    def reduce_component_notes(
+        self,
+        *,
+        goal: str,
+        component_name: str,
+        raw_notes: str,
+    ) -> str:
+        prompt = self._templates.prompt_component_prune.format(
+            goal=goal,
+            component=component_name,
+            raw_notes=raw_notes,
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_component_prune,
+            user_prompt=prompt,
+            metadata={"stage": "component_prune", "component": component_name},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="component_prune",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "component_prune", "component": component_name},
+            )
+        )
+        return response
+
+    def polish_component_document(
+        self,
+        *,
+        goal: str,
+        component_name: str,
+        repo_name: str,
+        condensed_notes: str,
+    ) -> str:
+        prompt = self._templates.prompt_component_polish.format(
+            goal=goal,
+            component=component_name,
+            repo=repo_name,
+            condensed=condensed_notes,
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_component_polish,
+            user_prompt=prompt,
+            metadata={"stage": "component_polish", "component": component_name},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="component_polish",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "component_polish", "component": component_name},
+            )
+        )
+        return response
+
+    def integrate_component_links(
+        self,
+        *,
+        base_document: str,
+        component_payload: List[Dict[str, str]],
+        goal: str,
+    ) -> str:
+        prompt = self._templates.prompt_document_integrator.format(
+            goal=goal,
+            document=base_document,
+            components=json.dumps(component_payload, ensure_ascii=False, indent=2),
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_document_integrator,
+            user_prompt=prompt,
+            metadata={"stage": "document_integrator"},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="document_integrator",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "document_integrator"},
+            )
+        )
+        return response
+
 
 DEFAULT_TEMPLATES = PromptTemplates(
     system_analyst="You are an expert software analyst who explains code precisely.",
@@ -676,4 +861,10 @@ DEFAULT_TEMPLATES = PromptTemplates(
     prompt_filter="""Project goal:\n{goal}\n\nSection metadata: {metadata}\nSection content:\n{section}\n\nRewrite this section so it only contains information that directly supports the project goal. If the section is irrelevant, respond with 'OMIT'.""",
     system_document="You are a principal technical writer who produces clear, top-down documentation for engineering stakeholders.",
     prompt_document="""Project goal:\n{goal}\n\nRepository name: {repo}\nProject tree:\n{tree}\n\nSection digests (JSON):\n{sections}\n\nProduce a standalone Markdown document that explains the repository from high level to implementation. Requirements:\n- Title the document with an H1 that includes the repository name and a concise tagline.\n- Provide a section `## At a Glance` with 4-6 bullets covering mission, architecture, LLM integration, and distinguishing traits.\n- Provide `## Functional Flow` with a numbered sequence describing how the system operates end-to-end.\n- Provide `## Component Breakdown` with subsections for the major modules or services, summarizing responsibilities and collaboration.\n- Provide `## Outputs & Observability` as bullets describing generated artefacts, logs, or metrics.\n- Provide `## Known Issues & Bugs` capturing risks, limitations, or TODOs; if none are apparent, write a single bullet stating that no issues were identified.\n- Avoid referencing the JSON directly; convert insights into prose.\n- Keep the tone confident and instructive, and keep the document concise and scannable.\n""",
+    system_component_prune="You are a ruthless technical editor who extracts only critical facts for component documentation.",
+    prompt_component_prune="""Project goal: {goal}\nComponent: {component}\n\nOverly descriptive notes:\n{raw_notes}\n\nCondense these notes to only the essential responsibilities, interactions, and edge considerations for the component. Return succinct Markdown bullets that can feed a polished document.""",
+    system_component_polish="You are a senior technical writer crafting polished component guides for engineers.",
+    prompt_component_polish="""Project goal: {goal}\nRepository: {repo}\nComponent: {component}\n\nCondensed notes:\n{condensed}\n\nProduce a clean Markdown document for the component with sections: `## Overview`, `## Key Responsibilities`, `## Collaboration Points`, and `## Implementation Notes`. Keep it scannable and confident.""",
+    system_document_integrator="You are a documentation curator who weaves component deep dives into a primary reference.",
+    prompt_document_integrator="""Project goal: {goal}\n\nBase document:\n{document}\n\nComponent documents (JSON):\n{components}\n\nAppend a new concluding section that gracefully introduces the component deep-dive documents. Preserve the original content, then add a `## Component Deep Dives` section with bullet links and friendly summaries for each component. Ensure the transition feels intentional and the tone matches the base document.""",
 )
