@@ -237,6 +237,7 @@ class Pipeline:
             raw_notes = "\n\n".join(raw_notes_parts).strip()
             if not raw_notes:
                 continue
+            highlight_snippets = self._select_highlight_snippets(sections)
             condensed = self._orchestrator.reduce_component_notes(
                 goal=goal,
                 component_name=component_key,
@@ -249,7 +250,9 @@ class Pipeline:
                 component_name=component_key,
                 repo_name=repo_name,
                 condensed_notes=condensed,
+                highlight_snippets=highlight_snippets,
             ).strip()
+            polished = self._strip_wrapping_code_fence(polished)
             if not polished:
                 continue
             slug_base = self._slugify_component(component_key)
@@ -304,3 +307,72 @@ class Pipeline:
     def _slugify_component(self, component_key: str) -> str:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", component_key.strip().lower()).strip("-")
         return slug or "component"
+
+    def _select_highlight_snippets(self, sections: List[Section]) -> List[Dict[str, object]]:
+        candidates: list[tuple[int, Dict[str, object]]] = []
+        for section in sections:
+            metadata = section.metadata
+            path_str = metadata.get("path")
+            if not isinstance(path_str, str):
+                continue
+            try:
+                start_line = int(metadata.get("start_line", 0))
+                end_line = int(metadata.get("end_line", 0))
+            except (TypeError, ValueError):
+                continue
+            if start_line <= 0 or end_line <= 0 or end_line < start_line:
+                continue
+            line_count = end_line - start_line + 1
+            dependencies = metadata.get("dependencies") or []
+            dep_count = len(dependencies) if isinstance(dependencies, list) else 0
+            if line_count < 18 and dep_count < 4:
+                continue
+            file_path = self._config.repo_path / path_str
+            if not file_path.exists():
+                continue
+            try:
+                code_lines = file_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            start_idx = max(start_line - 1, 0)
+            end_idx = min(len(code_lines), start_idx + 20, end_line)
+            if end_idx <= start_idx:
+                continue
+            snippet_lines = code_lines[start_idx:end_idx]
+            code_excerpt = "\n".join(snippet_lines).strip()
+            if not code_excerpt:
+                continue
+            score = line_count + dep_count * 5
+            candidates.append(
+                (
+                    score,
+                    {
+                        "title": section.title,
+                        "path": path_str,
+                        "start_line": start_line,
+                        "end_line": start_idx + len(snippet_lines),
+                        "code": code_excerpt,
+                    },
+                )
+            )
+        if not candidates:
+            return []
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        top_snippets: List[Dict[str, object]] = []
+        for _, snippet in candidates[:2]:
+            top_snippets.append(snippet)
+        return top_snippets
+
+    def _strip_wrapping_code_fence(self, text: str) -> str:
+        if not text:
+            return text
+        stripped = text.strip()
+        fence_match = re.match(r"^```([^\n]*)\n(?P<body>.*)\n```$", stripped, re.DOTALL)
+        if not fence_match:
+            return stripped
+        language = (fence_match.group(1) or "").strip().lower()
+        if language and language not in {"markdown", "md", "text", "txt"}:
+            return stripped
+        body = fence_match.group("body").rstrip()
+        return body or stripped
+

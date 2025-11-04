@@ -491,6 +491,8 @@ class MockLLM:
         intro = next((line for line in overview_lines if "Focus:" in line), overview_lines[0] if overview_lines else "Purpose pending analysis.")
         responsibilities = [line for line in overview_lines if line.startswith("Focus:")]
         interactions = [line for line in overview_lines if "Interaction cue" in line]
+        snippet_matches = re.findall(r"```python\n(.*?)\n```", prompt, flags=re.DOTALL)
+        snippet_body = snippet_matches[0].strip() if snippet_matches else ""
         lines = [
             f"# {component.strip()} Component Guide",
             "",
@@ -509,6 +511,8 @@ class MockLLM:
         else:
             lines.append("- Interacts with surrounding modules as orchestrated by the game runner.")
         lines.extend(["", "## Implementation Notes", "- Refer to source summaries for concrete behaviors."])
+        if snippet_body:
+            lines.extend(["", "```python", snippet_body, "```"])
         return "\n".join(lines).strip() + "\n"
 
     def _integrate_component_section(self, prompt: str) -> str:
@@ -796,12 +800,35 @@ class PromptOrchestrator:
         component_name: str,
         repo_name: str,
         condensed_notes: str,
+        highlight_snippets: Optional[List[Dict[str, object]]] = None,
     ) -> str:
+        snippet_block = ""
+        if highlight_snippets:
+            snippet_parts: list[str] = []
+            for snippet in highlight_snippets:
+                code = str(snippet.get("code", "")).strip()
+                if not code:
+                    continue
+                title = str(snippet.get("title", "Key excerpt")).strip()
+                path = str(snippet.get("path", ""))
+                start_line = snippet.get("start_line")
+                end_line = snippet.get("end_line")
+                location_parts: list[str] = []
+                if path:
+                    location_parts.append(path)
+                if isinstance(start_line, int) and isinstance(end_line, int):
+                    location_parts.append(f"L{start_line}-{end_line}")
+                location = " ".join(location_parts)
+                header = f"- {title}" + (f" ({location})" if location else "")
+                snippet_parts.append(f"{header}\n```python\n{code}\n```")
+            if snippet_parts:
+                snippet_block = "\n\nHighlighted code excerpts:\n" + "\n\n".join(snippet_parts)
         prompt = self._templates.prompt_component_polish.format(
             goal=goal,
             component=component_name,
             repo=repo_name,
             condensed=condensed_notes,
+            snippet_block=snippet_block,
         )
         response = self._client.complete(
             system_prompt=self._templates.system_component_polish,
@@ -814,7 +841,11 @@ class PromptOrchestrator:
                 prompt=prompt,
                 response=response,
                 timestamp=datetime.utcnow(),
-                metadata={"stage": "component_polish", "component": component_name},
+                metadata={
+                    "stage": "component_polish",
+                    "component": component_name,
+                    "highlight_count": len(highlight_snippets or []),
+                },
             )
         )
         return response
@@ -861,10 +892,10 @@ DEFAULT_TEMPLATES = PromptTemplates(
     prompt_filter="""Project goal:\n{goal}\n\nSection metadata: {metadata}\nSection content:\n{section}\n\nRewrite this section so it only contains information that directly supports the project goal. If the section is irrelevant, respond with 'OMIT'.""",
     system_document="You are a principal technical writer who produces clear, top-down documentation for engineering stakeholders.",
     prompt_document="""Project goal:\n{goal}\n\nRepository name: {repo}\nProject tree:\n{tree}\n\nSection digests (JSON):\n{sections}\n\nProduce a standalone Markdown document that explains the repository from high level to implementation. Requirements:\n- Title the document with an H1 that includes the repository name and a concise tagline.\n- Provide a section `## At a Glance` with 4-6 bullets covering mission, architecture, LLM integration, and distinguishing traits.\n- Provide `## Functional Flow` with a numbered sequence describing how the system operates end-to-end.\n- Provide `## Component Breakdown` with subsections for the major modules or services, summarizing responsibilities and collaboration.\n- Provide `## Outputs & Observability` as bullets describing generated artefacts, logs, or metrics.\n- Provide `## Known Issues & Bugs` capturing risks, limitations, or TODOs; if none are apparent, write a single bullet stating that no issues were identified.\n- Avoid referencing the JSON directly; convert insights into prose.\n- Keep the tone confident and instructive, and keep the document concise and scannable.\n""",
-    system_component_prune="You are a ruthless technical editor who extracts only critical facts for component documentation.",
-    prompt_component_prune="""Project goal: {goal}\nComponent: {component}\n\nOverly descriptive notes:\n{raw_notes}\n\nCondense these notes to only the essential responsibilities, interactions, and edge considerations for the component. Return succinct Markdown bullets that can feed a polished document.""",
-    system_component_polish="You are a senior technical writer crafting polished component guides for engineers.",
-    prompt_component_polish="""Project goal: {goal}\nRepository: {repo}\nComponent: {component}\n\nCondensed notes:\n{condensed}\n\nProduce a clean Markdown document for the component with sections: `## Overview`, `## Key Responsibilities`, `## Collaboration Points`, and `## Implementation Notes`. Keep it scannable and confident.""",
+    system_component_prune="You are a ruthless technical editor who extracts only critical facts for component documentation. Always return plain Markdown without wrapping the entire response in code fences.",
+    prompt_component_prune="""Project goal: {goal}\nComponent: {component}\n\nOverly descriptive notes:\n{raw_notes}\n\nCondense these notes to only the essential responsibilities, interactions, and edge considerations for the component. Return succinct Markdown bullets that can feed a polished document. Do not surround the response with ``` fences.""",
+    system_component_polish="You are a senior technical writer crafting polished component guides for engineers. Deliver polished Markdown directly—never wrap the whole response in a fenced code block. Use language-specific fenced code snippets only when they clarify a critical implementation point, and keep such snippets short (<=10 lines).",
+    prompt_component_polish="""Project goal: {goal}\nRepository: {repo}\nComponent: {component}\n\nCondensed notes:\n{condensed}{snippet_block}\n\nProduce a clean Markdown document for the component with sections: `## Overview`, `## Key Responsibilities`, `## Collaboration Points`, and `## Implementation Notes`. Keep it scannable and confident. Only include a ```python``` snippet when highlighting an important code path, and otherwise avoid code fences entirely.""",
     system_document_integrator="You are a documentation curator who weaves component deep dives into a primary reference.",
     prompt_document_integrator="""Project goal: {goal}\n\nBase document:\n{document}\n\nComponent documents (JSON):\n{components}\n\nAppend a new concluding section that gracefully introduces the component deep-dive documents. Preserve the original content, then add a `## Component Deep Dives` section with bullet links and friendly summaries for each component. Ensure the transition feels intentional and the tone matches the base document.""",
 )
