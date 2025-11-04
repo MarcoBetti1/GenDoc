@@ -42,16 +42,16 @@
 ## Component Deep Dives
 To provide a more detailed understanding of each component within the GenDoc pipeline, we have prepared deep-dive documents that explore their functionalities and roles in the overall architecture. Below are the links to these documents, along with friendly summaries:
 
-- [**Code Analysis - ProjectAnalyzer**](output_components/src-gendoc-analysis-py.md): This document outlines how the `ProjectAnalyzer` class works to analyze the project structure and extract essential code elements, forming the backbone of the documentation generation process.
+- [**Code Analysis - ProjectAnalyzer**](Documents/src-gendoc-analysis-py.md): This document outlines how the `ProjectAnalyzer` class works to analyze the project structure and extract essential code elements, forming the backbone of the documentation generation process.
 
-- [**Command Line Interface - CLI**](output_components/src-gendoc-cli-py.md): Dive into the `src/gendoc/cli.py` component, which provides the command line interface for interacting with the GenDoc pipeline, enabling users to initiate documentation generation with ease.
+- [**Command Line Interface - CLI**](Documents/src-gendoc-cli-py.md): Dive into the `src/gendoc/cli.py` component, which provides the command line interface for interacting with the GenDoc pipeline, enabling users to initiate documentation generation with ease.
 
-- [**Configuration Management - Config**](output_components/src-gendoc-config-py.md): Learn about the `src/gendoc/config.py` component, which manages and validates configuration settings crucial for the smooth operation of the GenDoc pipeline.
+- [**Configuration Management - Config**](Documents/src-gendoc-config-py.md): Learn about the `src/gendoc/config.py` component, which manages and validates configuration settings crucial for the smooth operation of the GenDoc pipeline.
 
-- [**Existing Documentation Collection - ExistingDocsCollector**](output_components/src-gendoc-existing-docs-py.md): This document details the `ExistingDocsCollector` class, responsible for gathering and filtering existing documentation to ensure the generated content is relevant and high-quality.
+- [**Existing Documentation Collection - ExistingDocsCollector**](Documents/src-gendoc-existing-docs-py.md): This document details the `ExistingDocsCollector` class, responsible for gathering and filtering existing documentation to ensure the generated content is relevant and high-quality.
 
-- [**Pipeline Integration**](output_components/src-gendoc-pipeline-py.md): Explore the responsibilities of the main pipeline orchestrator, which integrates all components and manages the flow from code analysis to documentation generation.
+- [**Pipeline Integration**](Documents/src-gendoc-pipeline-py.md): Explore the responsibilities of the main pipeline orchestrator, which integrates all components and manages the flow from code analysis to documentation generation.
 
-- [**Prompt Management - Prompting**](output_components/src-gendoc-prompting-py.md): Understand the responsibilities of the `PromptOrchestrator`, which formats and refines prompts for the language model, ensuring consistency and clarity in the generated documentation.
+- [**Prompt Management - Prompting**](Documents/src-gendoc-prompting-py.md): Understand the responsibilities of the `PromptOrchestrator`, which formats and refines prompts for the language model, ensuring consistency and clarity in the generated documentation.
 
 These deep dives will provide you with a comprehensive understanding of each component's role and functionality within the GenDoc pipeline, enhancing your ability to utilize and contribute to the project effectively.
