@@ -53,3 +53,4 @@ GenDoc/
 - Config file (diff llms per diff functions)
 - Token limit
 - include comprehensive ToRun section in Readme (windows + mac)
+- combine component deep dives into component breakdown section
