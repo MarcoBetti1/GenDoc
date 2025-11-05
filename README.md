@@ -52,4 +52,4 @@ GenDoc/
 ## Next Steps
 - Config file (diff llms per diff functions)
 - Token limit
-- 
+- include comprehensive ToRun section in Readme (windows + mac)
