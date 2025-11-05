@@ -24,7 +24,3 @@ GenDoc will produce complete, human-friendly documentation for an existing codeb
    - How frequently should documentation be regenerated to stay current? Not needed for first version
    - What signals will trigger updates (commits, releases, manual requests)? Not needed for first version
    - How will we handle versioning and historical records of documentation? Not needed for first version
-
-## Immediate Next Steps
-- Prioritize the strategic questions and identify the research needed to answer each.
-- Draft an initial roadmap that sequences discovery, prototyping, and rollout phases.
