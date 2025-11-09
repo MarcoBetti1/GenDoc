@@ -417,10 +417,6 @@ class MockLLM:
             "Prompt ledger (`prompt-ledger.jsonl`) capturing LLM interactions.",
         ]
 
-        issues = [
-            "No issues were identified during mock generation; review real LLM output for accuracy.",
-        ]
-
         lines = [
             f"# {repo} - Mock Overview",
             "",
@@ -440,10 +436,6 @@ class MockLLM:
         lines.append("")
         lines.append("## Outputs & Observability")
         lines.extend(f"- {item}" for item in outputs)
-
-        lines.append("")
-        lines.append("## Known Issues & Bugs")
-        lines.extend(f"- {item}" for item in issues)
 
         return "\n".join(lines).strip() + "\n"
 
@@ -1008,7 +1000,7 @@ DEFAULT_TEMPLATES = PromptTemplates(
     system_filter="You are an editor who preserves only information relevant to the project goal.",
     prompt_filter="""Project goal:\n{goal}\n\nSection metadata: {metadata}\nSection content:\n{section}\n\nRewrite this section so it only contains information that directly supports the project goal. If the section is irrelevant, respond with 'OMIT'.""",
     system_document="You are a principal technical writer who produces clear, top-down documentation for engineering stakeholders.",
-    prompt_document="""Project goal:\n{goal}\n\nRepository name: {repo}\nProject tree:\n{tree}\n\nSection digests (JSON):\n{sections}\n\nProduce a standalone Markdown document that explains the repository from high level to implementation. Requirements:\n- Title the document with an H1 that includes the repository name and a concise tagline.\n- Provide a section `## At a Glance` with 4-6 bullets covering mission, architecture, LLM integration, and distinguishing traits.\n- Provide `## Functional Flow` with a numbered sequence describing how the system operates end-to-end.\n- Provide `## Component Breakdown` with subsections for the major modules or services, summarizing responsibilities and collaboration.\n- Provide `## Outputs & Observability` as bullets describing generated artefacts, logs, or metrics.\n- Provide `## Known Issues & Bugs` capturing risks, limitations, or TODOs; if none are apparent, write a single bullet stating that no issues were identified.\n- Avoid referencing the JSON directly; convert insights into prose.\n- Keep the tone confident and instructive, and keep the document concise and scannable.\n""",
+    prompt_document="""Project goal:\n{goal}\n\nRepository name: {repo}\nProject tree:\n{tree}\n\nSection digests (JSON):\n{sections}\n\nProduce a standalone Markdown document that explains the repository from high level to implementation. Requirements:\n- Title the document with an H1 that includes the repository name and a concise tagline.\n- Provide a section `## At a Glance` with 4-6 bullets covering mission, architecture, LLM integration, and distinguishing traits.\n- Provide `## Functional Flow` with a numbered sequence describing how the system operates end-to-end.\n- Provide `## Component Breakdown` with subsections for the major modules or services, summarizing responsibilities, collaboration, and references to any detailed write-ups where appropriate.\n- Provide `## Outputs & Observability` as bullets describing generated artefacts, logs, or metrics.\n- Do not include a "Known Issues" or bug section—focus solely on insights supported directly by the analysed code.\n- Avoid referencing the JSON directly; convert insights into prose.\n- Keep the tone confident and instructive, and keep the document concise and scannable.\n""",
     system_component_prune="You are a ruthless technical editor who extracts only critical facts for component documentation. Always return plain Markdown without wrapping the entire response in code fences.",
     prompt_component_prune="""Project goal: {goal}\nComponent: {component}\n\nOverly descriptive notes:\n{raw_notes}\n\nCondense these notes to only the essential responsibilities, interactions, and edge considerations for the component. Return succinct Markdown bullets that can feed a polished document. Do not surround the response with ``` fences.""",
     system_component_polish="You are a senior technical writer crafting polished component guides for engineers. Deliver polished Markdown directly—never wrap the whole response in a fenced code block. Use language-specific fenced code snippets only when they clarify a critical implementation point, and keep such snippets short (<=10 lines).",

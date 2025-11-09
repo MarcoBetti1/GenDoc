@@ -41,6 +41,7 @@ class ComponentDocument:
     relative_path: str
     summary: str
     content: str
+    identifiers: List[str] = field(default_factory=list)
 
 
 class Pipeline:
@@ -238,8 +239,12 @@ class Pipeline:
         repo_name = self._config.repo_path.name
         for component_key, sections in grouped.items():
             raw_notes_parts = []
+            identifiers: list[str] = []
             for section in sections:
                 raw_notes_parts.append(f"### {section.title}\n{section.body.strip()}")
+                identifier = section.metadata.get("identifier")
+                if identifier:
+                    identifiers.append(str(identifier))
             raw_notes = "\n\n".join(raw_notes_parts).strip()
             if not raw_notes:
                 continue
@@ -285,6 +290,7 @@ class Pipeline:
                     relative_path=relative_path,
                     summary=summary_line.lstrip("- "),
                     content=polished,
+                    identifiers=sorted(set(identifiers)),
                 )
             )
         return generated
@@ -392,6 +398,45 @@ class Pipeline:
             return ""
         return refined.strip()
 
+    def _insert_run_section(self, document_text: str, run_section: str) -> str:
+        cleaned_section = run_section.strip()
+        if not cleaned_section:
+            return document_text
+        if not cleaned_section.lower().startswith("## to run"):
+            cleaned_section = f"## To Run\n\n{cleaned_section}"
+
+        to_run_pattern = re.compile(r"^## To Run.*?(?=^\s*## |\Z)", re.DOTALL | re.MULTILINE)
+        document_body = to_run_pattern.sub("", document_text).strip("\n")
+
+        insertion_candidates = [
+            re.compile(r"(^## Functional Flow.*?)(?=^\s*## |\Z)", re.DOTALL | re.MULTILINE),
+            re.compile(r"(^## At a Glance.*?)(?=^\s*## |\Z)", re.DOTALL | re.MULTILINE),
+        ]
+
+        insert_pos: int | None = None
+        for pattern in insertion_candidates:
+            match = pattern.search(document_body)
+            if match:
+                insert_pos = match.end()
+                break
+
+        if insert_pos is None:
+            insert_pos = document_body.find("\n## ")
+            if insert_pos == -1:
+                insert_pos = len(document_body)
+
+        before = document_body[:insert_pos].rstrip("\n")
+        after = document_body[insert_pos:].lstrip("\n")
+
+        segments = []
+        if before:
+            segments.append(before)
+        segments.append(cleaned_section)
+        if after:
+            segments.append(after)
+
+        return "\n\n".join(segments).strip("\n") + "\n"
+
     def _build_run_context(self, existing_docs: Dict[Path, str]) -> List[Dict[str, str]]:
         repo_root = self._config.repo_path
         entries: list[dict[str, str]] = []
@@ -441,108 +486,192 @@ class Pipeline:
                 add_entry(source_path, source_path.read_text(encoding="utf-8"))
             except OSError as exc:  # pragma: no cover - filesystem guard
                 logger.debug("Failed to read source context %s: %s", source_path, exc)
+        return entries
 
-        return entries[:8]
-
-    def _insert_run_section(self, document: str, run_section: str) -> str:
-        section_text = run_section.strip()
-        if not section_text:
-            return document
-        if "## To Run" not in section_text:
-            section_text = "## To Run\n" + section_text
-        cleaned = re.sub(r"\n## To Run\b.*?(?=\n## |\Z)", "", document, flags=re.S)
-        flow_match = re.search(r"(## Functional Flow\b.*?)(?=\n## |\Z)", cleaned, flags=re.S)
-        if not flow_match:
-            return cleaned.rstrip() + "\n\n" + section_text + "\n"
-        insert_pos = flow_match.end()
-        return (
-            cleaned[:insert_pos].rstrip()
-            + "\n\n"
-            + section_text
-            + "\n\n"
-            + cleaned[insert_pos:].lstrip()
-        )
-
-    def _merge_component_deep_links(self, document_text: str, component_docs: List[ComponentDocument]) -> str:
-        if not component_docs:
-            return document_text
-        pattern = re.compile(r"(## Component Breakdown\b)(?P<body>.*?)(?=\n## |\Z)", re.S)
-        match = pattern.search(document_text)
-        if not match:
-            return document_text
-        section_text = match.group(0)
-        merged_section = self._augment_component_breakdown(section_text, component_docs)
-        return document_text[:match.start()] + merged_section + document_text[match.end():]
-
-    def _augment_component_breakdown(self, section_text: str, component_docs: List[ComponentDocument]) -> str:
+    def _augment_component_breakdown(
+        self,
+        *,
+        section_text: str,
+        component_docs: List[ComponentDocument],
+    ) -> str:
         lines = section_text.splitlines()
         if not lines:
             return section_text
         header = lines[0]
         remainder = lines[1:]
-        grouped: Dict[str, List[ComponentDocument]] = {}
-        for doc in component_docs:
-            key = self._normalize_component_key(doc.name)
-            grouped.setdefault(key, []).append(doc)
-
         result_lines: list[str] = [header]
-        pending_docs: List[ComponentDocument] = []
-        for idx, line in enumerate(remainder):
+        used_docs: set[int] = set()
+        idx = 0
+        while idx < len(remainder):
+            line = remainder[idx]
             stripped = line.strip()
             if stripped.startswith("### "):
-                if pending_docs:
-                    if result_lines and result_lines[-1].strip():
-                        result_lines.append("")
-                    result_lines.extend(self._format_component_link_lines(pending_docs))
-                    pending_docs = []
+                heading_text = stripped[4:].strip()
                 result_lines.append(line)
-                heading = stripped[4:].strip()
-                key = self._normalize_component_key(heading)
-                pending_docs = grouped.pop(key, [])
-            else:
-                result_lines.append(line)
-            next_line = remainder[idx + 1] if idx + 1 < len(remainder) else None
-            if pending_docs and (next_line is None or next_line.strip().startswith("### ")):
-                if result_lines and result_lines[-1].strip():
+                idx += 1
+                block_lines: list[str] = []
+                while idx < len(remainder) and not remainder[idx].strip().startswith("### "):
+                    block_lines.append(remainder[idx])
+                    idx += 1
+                matched_indices = self._match_component_doc_indices(heading_text, component_docs)
+                matched_docs = [component_docs[i] for i in matched_indices]
+                used_docs.update(matched_indices)
+                updated_block = self._attach_component_links(block_lines, matched_docs)
+                result_lines.extend(updated_block)
+                if updated_block and updated_block[-1].strip():
                     result_lines.append("")
-                result_lines.extend(self._format_component_link_lines(pending_docs))
-                pending_docs = []
-        if pending_docs:
-            if result_lines and result_lines[-1].strip():
-                result_lines.append("")
-            result_lines.extend(self._format_component_link_lines(pending_docs))
+                continue
+            result_lines.append(line)
+            idx += 1
 
-        leftover_docs: list[ComponentDocument] = []
-        for docs in grouped.values():
-            leftover_docs.extend(docs)
+        leftover_docs = [component_docs[i] for i in range(len(component_docs)) if i not in used_docs]
         if leftover_docs:
             if result_lines and result_lines[-1].strip():
                 result_lines.append("")
-            result_lines.append("### Additional Components")
-            result_lines.extend(self._format_component_link_lines(leftover_docs))
+            result_lines.extend(self._attach_component_links([], leftover_docs, allow_inline=False))
 
         if result_lines and result_lines[-1].strip():
             result_lines.append("")
-        return "\n".join(result_lines)
+        return "\n".join(line for line in result_lines)
+
+    def _merge_component_deep_links(
+        self,
+        document_text: str,
+        component_docs: List[ComponentDocument],
+    ) -> str:
+        if not component_docs:
+            return document_text
+        pattern = re.compile(r"(^## Component Breakdown.*?)(?=^\s*## |\Z)", re.DOTALL | re.MULTILINE)
+        match = pattern.search(document_text)
+        if not match:
+            references = self._attach_component_links([], component_docs, allow_inline=False)
+            base_text = document_text.rstrip()
+            reference_block = "\n".join(references)
+            return f"{base_text}\n\n{reference_block}\n"
+        section_text = match.group(0)
+        augmented = self._augment_component_breakdown(section_text=section_text, component_docs=component_docs)
+        start, end = match.span(0)
+        return f"{document_text[:start]}{augmented}{document_text[end:]}"
+
+        if result_lines and result_lines[-1].strip():
+            result_lines.append("")
+        return "\n".join(line for line in result_lines if line is not None)
+
+    def _match_component_doc_indices(self, heading: str, component_docs: List[ComponentDocument]) -> List[int]:
+        heading_key = self._normalize_component_key(heading)
+        heading_tokens = self._tokenize_key(heading)
+        matches: list[tuple[int, int]] = []
+        for idx, doc in enumerate(component_docs):
+            doc_keys = self._component_doc_keys(doc)
+            doc_tokens = self._component_doc_tokens(doc)
+            score = 0
+            if heading_key and heading_key in doc_keys:
+                score = 3
+            elif heading_key and any(heading_key in key or key in heading_key for key in doc_keys if key):
+                score = 2
+            elif heading_tokens and doc_tokens and heading_tokens & doc_tokens:
+                score = 1
+            if score:
+                matches.append((score, idx))
+        if not matches:
+            return []
+        max_score = max(score for score, _ in matches)
+        return [idx for score, idx in matches if score == max_score]
 
     def _normalize_component_key(self, value: str) -> str:
-        cleaned = (value or "").replace("\\", "/").strip()
+        if not value:
+            return ""
+        cleaned = value.strip().replace("\\", "/")
         if "/" in cleaned:
             cleaned = cleaned.split("/")[-1]
-        return cleaned.lower()
+        cleaned = re.sub(r"\.(py|pyi|md|rst|txt)$", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"[^A-Za-z0-9]+", "", cleaned.lower())
+        return cleaned
+
+    def _component_doc_keys(self, doc: ComponentDocument) -> set[str]:
+        keys: set[str] = set()
+        keys.add(self._normalize_component_key(doc.name))
+        display = self._component_display_name(doc)
+        keys.add(self._normalize_component_key(display))
+        base = display.rsplit(".", 1)[0]
+        keys.add(self._normalize_component_key(base))
+        for identifier in doc.identifiers:
+            keys.add(self._normalize_component_key(identifier))
+            parts = re.split(r"[.:]+", identifier)
+            if parts:
+                keys.add(self._normalize_component_key(parts[-1]))
+        return {key for key in keys if key}
+
+    def _component_doc_tokens(self, doc: ComponentDocument) -> set[str]:
+        tokens = set()
+        tokens.update(self._tokenize_key(doc.name))
+        display = self._component_display_name(doc)
+        tokens.update(self._tokenize_key(display))
+        base = display.rsplit(".", 1)[0]
+        tokens.update(self._tokenize_key(base))
+        for identifier in doc.identifiers:
+            tokens.update(self._tokenize_key(identifier))
+            parts = re.split(r"[.:]+", identifier)
+            if parts:
+                tokens.update(self._tokenize_key(parts[-1]))
+        if doc.summary:
+            tokens.update(self._tokenize_key(doc.summary))
+        return {token for token in tokens if token}
+
+    def _tokenize_key(self, value: str) -> set[str]:
+        if not value:
+            return set()
+        cleaned = value.replace("\\", "/").replace(".", " ")
+        parts = re.split(r"[^A-Za-z0-9]+", cleaned)
+        tokens: list[str] = []
+        for part in parts:
+            if not part:
+                continue
+            camel_tokens = re.findall(r"[A-Z]?[a-z]+|[0-9]+", part)
+            if camel_tokens:
+                tokens.extend(camel_tokens)
+            else:
+                tokens.append(part)
+        return {token.lower() for token in tokens if token}
 
     def _component_display_name(self, doc: ComponentDocument) -> str:
         base = doc.name.replace("\\", "/").split("/")[-1]
         return base or doc.name
 
-    def _format_component_link_lines(self, docs: List[ComponentDocument]) -> List[str]:
-        lines: list[str] = []
-        for doc in docs:
-            display = self._component_display_name(doc)
-            summary = self._clean_summary(doc.summary)
-            link = f"[{display}]({doc.relative_path})"
-            lines.append(f"- Deep dive: {link} — {summary}")
+    def _format_doc_link(self, doc: ComponentDocument) -> str:
+        display = self._component_display_name(doc)
+        return f"[{display}]({doc.relative_path})"
+
+    def _attach_component_links(
+        self,
+        block_lines: List[str],
+        docs: List[ComponentDocument],
+        *,
+        allow_inline: bool = True,
+    ) -> List[str]:
+        if not docs:
+            return block_lines
+        lines = list(block_lines)
+        primary_doc = docs[0]
+        if allow_inline:
+            attach_index = next((idx for idx, value in enumerate(lines) if value.strip()), None)
+            reference_text = self._format_doc_link(primary_doc)
+            if attach_index is not None:
+                lines[attach_index] = self._append_inline_reference(lines[attach_index], reference_text)
+            else:
+                lines.append(f"- Reference: {reference_text}")
+        else:
+            lines.append(f"- Reference: {self._format_doc_link(primary_doc)} — {self._clean_summary(primary_doc.summary)}")
+        for doc in docs[1:]:
+            lines.append(f"- Also see {self._format_doc_link(doc)} — {self._clean_summary(doc.summary)}")
         return lines
+
+    def _append_inline_reference(self, line: str, reference_text: str) -> str:
+        stripped = line.rstrip()
+        suffix = f" (See {reference_text} for details.)"
+        if stripped.endswith(('.', '!', '?')):
+            return stripped + suffix
+        return stripped + suffix
 
     def _clean_summary(self, summary: str | None) -> str:
         if not summary:
