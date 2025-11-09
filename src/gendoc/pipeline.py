@@ -75,12 +75,18 @@ class Pipeline:
             refined_sections = element_sections
         cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
         document_text = self._compose_document(structure, refined_sections, project_goal)
+        run_section = self._generate_run_section(existing_docs=existing_docs, goal=project_goal)
+        if run_section:
+            document_text = self._insert_run_section(document_text, run_section)
         component_docs = self._generate_component_documents(
             element_sections=element_sections,
             goal=project_goal,
         )
         if component_docs:
-            document_text = self._integrate_component_docs(document_text, component_docs, project_goal)
+            document_text = self._integrate_component_docs(
+                document_text=document_text,
+                component_docs=component_docs,
+            )
         self._write_output(document_text)
 
         summary = RunSummary(
@@ -285,24 +291,11 @@ class Pipeline:
 
     def _integrate_component_docs(
         self,
+        *,
         document_text: str,
         component_docs: List[ComponentDocument],
-        goal: str,
     ) -> str:
-        payload = [
-            {
-                "name": doc.name,
-                "relative_path": doc.relative_path,
-                "summary": doc.summary,
-            }
-            for doc in component_docs
-        ]
-        integrated = self._orchestrator.integrate_component_links(
-            base_document=document_text,
-            component_payload=payload,
-            goal=goal,
-        )
-        return integrated.strip()
+        return self._merge_component_deep_links(document_text, component_docs)
 
     def _slugify_component(self, component_key: str) -> str:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", component_key.strip().lower()).strip("-")
@@ -375,4 +368,185 @@ class Pipeline:
             return stripped
         body = fence_match.group("body").rstrip()
         return body or stripped
+
+    def _generate_run_section(self, *, existing_docs: Dict[Path, str], goal: str) -> str:
+        context_entries = self._build_run_context(existing_docs)
+        if not context_entries:
+            return ""
+        try:
+            draft = self._orchestrator.collect_run_steps(goal=goal, context_entries=context_entries)
+        except Exception as exc:  # pragma: no cover - resilience guard
+            logger.warning("Failed to draft run instructions: %s", exc)
+            return ""
+        sanitized = draft.strip()
+        try:
+            parsed = json.loads(sanitized)
+        except json.JSONDecodeError:
+            normalized = sanitized
+        else:
+            normalized = json.dumps(parsed, ensure_ascii=False, indent=2)
+        try:
+            refined = self._orchestrator.refine_run_steps(goal=goal, draft=normalized)
+        except Exception as exc:  # pragma: no cover - resilience guard
+            logger.warning("Failed to refine run instructions: %s", exc)
+            return ""
+        return refined.strip()
+
+    def _build_run_context(self, existing_docs: Dict[Path, str]) -> List[Dict[str, str]]:
+        repo_root = self._config.repo_path
+        entries: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def add_entry(path: Path, content: str) -> None:
+            try:
+                relative = path.relative_to(repo_root)
+            except ValueError:
+                relative = path
+            key = str(relative).replace("\\", "/")
+            if key in seen:
+                return
+            excerpt = (content or "").strip()
+            if not excerpt:
+                return
+            entries.append({"path": key, "excerpt": excerpt[:4000]})
+            seen.add(key)
+
+        doc_keywords = ("readme", "usage", "getting-started", "setup", "install", "run", "quickstart")
+        for path, content in existing_docs.items():
+            name = path.name.lower()
+            if any(keyword in name for keyword in doc_keywords):
+                add_entry(path, content)
+
+        fallback_docs = [
+            repo_root / "README.md",
+            repo_root / "docs" / "README.md",
+            repo_root / "samples" / "demo_app" / "README.md",
+        ]
+        for doc_path in fallback_docs:
+            if not doc_path.exists():
+                continue
+            try:
+                add_entry(doc_path, doc_path.read_text(encoding="utf-8"))
+            except OSError as exc:  # pragma: no cover - filesystem guard
+                logger.debug("Failed to read fallback doc %s: %s", doc_path, exc)
+
+        source_paths = [
+            repo_root / "pyproject.toml",
+            repo_root / "src" / "gendoc" / "cli.py",
+        ]
+        for source_path in source_paths:
+            if not source_path.exists():
+                continue
+            try:
+                add_entry(source_path, source_path.read_text(encoding="utf-8"))
+            except OSError as exc:  # pragma: no cover - filesystem guard
+                logger.debug("Failed to read source context %s: %s", source_path, exc)
+
+        return entries[:8]
+
+    def _insert_run_section(self, document: str, run_section: str) -> str:
+        section_text = run_section.strip()
+        if not section_text:
+            return document
+        if "## To Run" not in section_text:
+            section_text = "## To Run\n" + section_text
+        cleaned = re.sub(r"\n## To Run\b.*?(?=\n## |\Z)", "", document, flags=re.S)
+        flow_match = re.search(r"(## Functional Flow\b.*?)(?=\n## |\Z)", cleaned, flags=re.S)
+        if not flow_match:
+            return cleaned.rstrip() + "\n\n" + section_text + "\n"
+        insert_pos = flow_match.end()
+        return (
+            cleaned[:insert_pos].rstrip()
+            + "\n\n"
+            + section_text
+            + "\n\n"
+            + cleaned[insert_pos:].lstrip()
+        )
+
+    def _merge_component_deep_links(self, document_text: str, component_docs: List[ComponentDocument]) -> str:
+        if not component_docs:
+            return document_text
+        pattern = re.compile(r"(## Component Breakdown\b)(?P<body>.*?)(?=\n## |\Z)", re.S)
+        match = pattern.search(document_text)
+        if not match:
+            return document_text
+        section_text = match.group(0)
+        merged_section = self._augment_component_breakdown(section_text, component_docs)
+        return document_text[:match.start()] + merged_section + document_text[match.end():]
+
+    def _augment_component_breakdown(self, section_text: str, component_docs: List[ComponentDocument]) -> str:
+        lines = section_text.splitlines()
+        if not lines:
+            return section_text
+        header = lines[0]
+        remainder = lines[1:]
+        grouped: Dict[str, List[ComponentDocument]] = {}
+        for doc in component_docs:
+            key = self._normalize_component_key(doc.name)
+            grouped.setdefault(key, []).append(doc)
+
+        result_lines: list[str] = [header]
+        pending_docs: List[ComponentDocument] = []
+        for idx, line in enumerate(remainder):
+            stripped = line.strip()
+            if stripped.startswith("### "):
+                if pending_docs:
+                    if result_lines and result_lines[-1].strip():
+                        result_lines.append("")
+                    result_lines.extend(self._format_component_link_lines(pending_docs))
+                    pending_docs = []
+                result_lines.append(line)
+                heading = stripped[4:].strip()
+                key = self._normalize_component_key(heading)
+                pending_docs = grouped.pop(key, [])
+            else:
+                result_lines.append(line)
+            next_line = remainder[idx + 1] if idx + 1 < len(remainder) else None
+            if pending_docs and (next_line is None or next_line.strip().startswith("### ")):
+                if result_lines and result_lines[-1].strip():
+                    result_lines.append("")
+                result_lines.extend(self._format_component_link_lines(pending_docs))
+                pending_docs = []
+        if pending_docs:
+            if result_lines and result_lines[-1].strip():
+                result_lines.append("")
+            result_lines.extend(self._format_component_link_lines(pending_docs))
+
+        leftover_docs: list[ComponentDocument] = []
+        for docs in grouped.values():
+            leftover_docs.extend(docs)
+        if leftover_docs:
+            if result_lines and result_lines[-1].strip():
+                result_lines.append("")
+            result_lines.append("### Additional Components")
+            result_lines.extend(self._format_component_link_lines(leftover_docs))
+
+        if result_lines and result_lines[-1].strip():
+            result_lines.append("")
+        return "\n".join(result_lines)
+
+    def _normalize_component_key(self, value: str) -> str:
+        cleaned = (value or "").replace("\\", "/").strip()
+        if "/" in cleaned:
+            cleaned = cleaned.split("/")[-1]
+        return cleaned.lower()
+
+    def _component_display_name(self, doc: ComponentDocument) -> str:
+        base = doc.name.replace("\\", "/").split("/")[-1]
+        return base or doc.name
+
+    def _format_component_link_lines(self, docs: List[ComponentDocument]) -> List[str]:
+        lines: list[str] = []
+        for doc in docs:
+            display = self._component_display_name(doc)
+            summary = self._clean_summary(doc.summary)
+            link = f"[{display}]({doc.relative_path})"
+            lines.append(f"- Deep dive: {link} — {summary}")
+        return lines
+
+    def _clean_summary(self, summary: str | None) -> str:
+        if not summary:
+            return "Further details available."
+        cleaned = summary.strip().lstrip("- ").strip()
+        return cleaned or "Further details available."
 

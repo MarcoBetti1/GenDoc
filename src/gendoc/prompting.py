@@ -96,6 +96,12 @@ class MockLLM:
         if "Condensed notes" in user_prompt and "Component:" in user_prompt:
             return self._polish_component_notes(user_prompt)
 
+        if "Return a JSON object with keys \"prerequisites\", \"windows\", \"mac\"" in user_prompt:
+            return self._mock_run_steps_context()
+
+        if "Raw run instructions (JSON):" in user_prompt and "Convert the JSON" in user_prompt:
+            return self._mock_run_markdown(user_prompt)
+
         if "Component documents (JSON):" in user_prompt and "Base document:" in user_prompt:
             return self._integrate_component_section(user_prompt)
 
@@ -515,9 +521,64 @@ class MockLLM:
             lines.extend(["", "```python", snippet_body, "```"])
         return "\n".join(lines).strip() + "\n"
 
+    def _mock_run_steps_context(self) -> str:
+        payload = {
+            "prerequisites": [
+                "Python 3.11 or newer",
+                "Set OPENAI_API_KEY when invoking the OpenAI provider",
+            ],
+            "windows": [
+                "python -m venv .venv",
+                r".venv\\Scripts\\Activate.ps1",
+                "pip install -e .",
+                "gendoc run --repo samples/demo_app --out docs/generated/demo-output.md --llm-provider mock",
+            ],
+            "mac": [
+                "python3 -m venv .venv",
+                "source .venv/bin/activate",
+                "pip install -e .",
+                "gendoc run --repo samples/demo_app --out docs/generated/demo-output.md --llm-provider mock",
+            ],
+            "notes": "Switch to --llm-provider openai after exporting OPENAI_API_KEY for live runs.",
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def _mock_run_markdown(self, prompt: str) -> str:
+        data = self._extract_json_block(prompt, "Raw run instructions (JSON):") or {}
+        if not data:
+            try:
+                data = json.loads(self._mock_run_steps_context())
+            except json.JSONDecodeError:
+                data = {}
+        prerequisites = data.get("prerequisites") or []
+        windows_steps = data.get("windows") or []
+        mac_steps = data.get("mac") or []
+        notes = data.get("notes")
+
+        lines = ["## To Run", ""]
+        if prerequisites:
+            lines.append("**Prerequisites**")
+            lines.extend(f"- {item}" for item in prerequisites)
+            lines.append("")
+        lines.append("### Windows")
+        lines.extend(self._format_numbered_steps(windows_steps))
+        lines.append("")
+        lines.append("### macOS")
+        lines.extend(self._format_numbered_steps(mac_steps))
+        if notes:
+            lines.extend(["", "**Notes**", f"- {notes}"])
+        return "\n".join(lines).strip() + "\n"
+
+    def _format_numbered_steps(self, steps: List[str]) -> List[str]:
+        if not steps:
+            return ["1. Refer to the README for the latest setup guidance."]
+        return [f"{idx}. {step}" for idx, step in enumerate(steps, start=1)]
+
     def _integrate_component_section(self, prompt: str) -> str:
         base = self._extract_between(prompt, "Base document:", "Component documents (JSON):") or ""
-        components_json = self._extract_between(prompt, "Component documents (JSON):", "Append a new concluding section")
+        components_json = self._extract_between(prompt, "Component documents (JSON):", "Update the base document")
+        if not components_json:
+            components_json = self._extract_between(prompt, "Component documents (JSON):", "Append a new concluding section")
         if not components_json:
             components_json = prompt.split("Component documents (JSON):", 1)[-1].split("Append a new concluding section", 1)[0].strip()
         try:
@@ -585,6 +646,10 @@ class PromptTemplates:
     prompt_component_polish: str
     system_document_integrator: str
     prompt_document_integrator: str
+    system_run_collector: str
+    prompt_run_collector: str
+    system_run_refiner: str
+    prompt_run_refiner: str
 
 
 class PromptOrchestrator:
@@ -765,6 +830,58 @@ class PromptOrchestrator:
         )
         return response
 
+    def collect_run_steps(
+        self,
+        *,
+        goal: str,
+        context_entries: List[Dict[str, str]],
+    ) -> str:
+        prompt = self._templates.prompt_run_collector.format(
+            goal=goal,
+            context=json.dumps(context_entries, ensure_ascii=False, indent=2),
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_run_collector,
+            user_prompt=prompt,
+            metadata={"stage": "run_collect"},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="run_collect",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "run_collect"},
+            )
+        )
+        return response
+
+    def refine_run_steps(
+        self,
+        *,
+        goal: str,
+        draft: str,
+    ) -> str:
+        prompt = self._templates.prompt_run_refiner.format(
+            goal=goal,
+            draft=draft,
+        )
+        response = self._client.complete(
+            system_prompt=self._templates.system_run_refiner,
+            user_prompt=prompt,
+            metadata={"stage": "run_refine"},
+        )
+        self._ledger.log(
+            PromptRecord(
+                role="run_refine",
+                prompt=prompt,
+                response=response,
+                timestamp=datetime.utcnow(),
+                metadata={"stage": "run_refine"},
+            )
+        )
+        return response
+
     def reduce_component_notes(
         self,
         *,
@@ -897,5 +1014,9 @@ DEFAULT_TEMPLATES = PromptTemplates(
     system_component_polish="You are a senior technical writer crafting polished component guides for engineers. Deliver polished Markdown directly—never wrap the whole response in a fenced code block. Use language-specific fenced code snippets only when they clarify a critical implementation point, and keep such snippets short (<=10 lines).",
     prompt_component_polish="""Project goal: {goal}\nRepository: {repo}\nComponent: {component}\n\nCondensed notes:\n{condensed}{snippet_block}\n\nProduce a clean Markdown document for the component with sections: `## Overview`, `## Key Responsibilities`, `## Collaboration Points`, and `## Implementation Notes`. Keep it scannable and confident. Only include a ```python``` snippet when highlighting an important code path, and otherwise avoid code fences entirely.""",
     system_document_integrator="You are a documentation curator who weaves component deep dives into a primary reference.",
-    prompt_document_integrator="""Project goal: {goal}\n\nBase document:\n{document}\n\nComponent documents (JSON):\n{components}\n\nAppend a new concluding section that gracefully introduces the component deep-dive documents. Preserve the original content, then add a `## Component Deep Dives` section with bullet links and friendly summaries for each component. Ensure the transition feels intentional and the tone matches the base document.""",
+    prompt_document_integrator="""Project goal: {goal}\n\nBase document:\n{document}\n\nComponent documents (JSON):\n{components}\n\nUpdate the base document so that the `## Component Breakdown` section references the component documents directly. For each component payload entry, add or augment a bullet beneath the best matching subsection that links to the deep-dive file and incorporates the friendly summary. Preserve every other section exactly as written, including any run guides that may already exist, and do not create a standalone `## Component Deep Dives` section.""",
+    system_run_collector="You are a release engineer who extracts concise cross-platform run instructions from technical materials.",
+    prompt_run_collector="""Project goal: {goal}\n\nContext entries (JSON array):\n{context}\n\nIdentify prerequisites, environment setup tasks, and execution commands required to run the project on Windows (PowerShell) and macOS (zsh or bash). Return a JSON object with keys \"prerequisites\", \"windows\", \"mac\", and optional \"notes\". Each value must be an array of strings except \"notes\", which may be a string. Focus on actionable steps including virtual environment creation, dependency installation, environment variables, and CLI invocation. Respond with JSON only.""",
+    system_run_refiner="You are a technical writer who formats platform-specific run instructions for engineers.",
+    prompt_run_refiner="""Project goal: {goal}\n\nRaw run instructions (JSON):\n{draft}\n\nConvert the JSON into a Markdown section titled `## To Run`. Present prerequisites as a bullet list when provided, followed by `### Windows` and `### macOS` subsections that each use ordered steps. Close with a short notes block if a \"notes\" field exists. Mention required environment variables explicitly and keep the tone reassuring and direct.""",
 )
