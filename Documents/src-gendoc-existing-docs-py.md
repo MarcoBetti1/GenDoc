@@ -1,37 +1,37 @@
 ## Overview
 
-The `ExistingDocsCollector` class is designed to streamline the process of gathering existing documentation files from a specified repository root. It efficiently identifies relevant documentation while excluding files from "generated" directories, ensuring that the collected data is both pertinent and manageable.
+The `ExistingDocsCollector` class is a crucial component of the GenDoc project, designed to gather existing documentation files from a specified repository root. It efficiently filters out files located in "generated" directories, ensuring that only relevant documentation is collected for further processing.
 
 ## Key Responsibilities
 
-- **Initialization**: The constructor initializes the collector with the repository root path, setting the stage for documentation retrieval.
-  
-- **Documentation Collection**: The `collect` method is the core functionality, responsible for:
-  - Iterating through supported file extensions to locate documentation files.
-  - Recursively searching for files while skipping any located in "generated" directories.
-  - Reading the contents of found files and storing them in a dictionary for easy access.
-
-- **Error Handling**: The class logs warnings for any `OSError` encountered during file reading, allowing the collection process to continue smoothly despite potential issues.
+- **Collect Documentation Files**: Scans the repository for documentation files based on predefined extensions.
+- **Exclude Generated Directories**: Automatically skips any files located within "generated" directories to maintain the integrity of the documentation.
+- **Read File Contents**: Reads the contents of the identified documentation files using UTF-8 encoding, preparing them for further analysis and integration.
 
 ## Collaboration Points
 
-- **Integration with Other Components**: The `ExistingDocsCollector` works in conjunction with the `ProjectAnalyzer` and `PromptOrchestrator` to ensure that the documentation generated is comprehensive and contextually relevant.
-  
-- **Dependency on `SUPPORTED_EXTENSIONS`**: This class relies on the `SUPPORTED_EXTENSIONS` variable, which should be defined elsewhere in the codebase to specify the file types considered as documentation.
+- **Integration with Code Analysis**: Works in tandem with other components that analyze code elements, providing context and existing documentation to enhance the overall documentation generation process.
+- **User Interaction**: Supports user-driven prompts by supplying relevant existing documentation, which can be utilized in generating refined responses.
 
 ## Implementation Notes
 
-- **Constructor**: 
-  - The constructor does not perform type checking on the `repo_root` parameter. Providing an invalid path may lead to exceptions during execution.
+### Class: `ExistingDocsCollector`
 
-- **Main Method**: 
-  - The `collect` method returns a dictionary where the keys are file paths and the values are the corresponding file contents. This structure facilitates easy access to documentation data.
+- **Constructor (`__init__`)**:
+  - Accepts a `repo_root` parameter of type `Path`, which defines the root directory for the repository.
+  - Initializes the `_repo_root` attribute for use in subsequent methods.
+  - Note: May raise a `TypeError` if the provided `repo_root` is not a valid `Path`.
+
+### Method: `collect`
+
+- Returns a dictionary mapping documentation file paths to their contents (`Dict[Path, str]`).
+- Iterates over `SUPPORTED_EXTENSIONS` to identify documentation files.
+- Skips files located in "generated" directories.
+- Reads file contents and logs warnings for any `OSError` encountered during file reading, allowing the process to continue for other files.
 
 ```python
 def collect(self) -> Dict[Path, str]:
-    # Iterates over SUPPORTED_EXTENSIONS to find documentation files
-    # Skips files in "generated" directories
-    # Logs warnings for unreadable files
+    # Implementation details...
 ```
 
-- **Side Effects**: The class logs warnings for any unreadable files, which aids in debugging and ensures that users are informed of potential issues during the documentation collection process.
+This structured approach ensures that the `ExistingDocsCollector` effectively contributes to the overall goal of streamlining documentation processes within software projects.

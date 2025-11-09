@@ -1,19 +1,19 @@
 ## Overview
-The `src/gendoc/cli.py` component serves as the command-line interface (CLI) for the GenDoc documentation generation pipeline. It facilitates user interaction by allowing the configuration of various parameters that influence the documentation process.
+The `src/gendoc/cli.py` component serves as the command-line interface (CLI) for the GenDoc project. It facilitates user interaction by allowing users to execute documentation generation tasks through command-line commands. The component is designed to be user-friendly while ensuring robust error handling and logging capabilities.
 
 ## Key Responsibilities
-- **Argument Parsing**: The `build_parser` function creates a robust `argparse.ArgumentParser` to handle user inputs, ensuring that all necessary arguments are captured and validated.
-- **Logging Configuration**: The `configure_logging` function sets up the logging framework, allowing for adjustable verbosity based on user preferences.
-- **Application Entry Point**: The `main` function acts as the entry point for the CLI, orchestrating the parsing of arguments, logging setup, command validation, and execution of the documentation pipeline.
+- **Argument Parsing**: The `build_parser` function creates a configured `ArgumentParser` that defines the command-line interface, including positional and optional arguments.
+- **Logging Configuration**: The `configure_logging` function sets up the logging framework for the application, allowing for adjustable logging levels.
+- **Main Execution Flow**: The `main` function acts as the entry point for the CLI, handling argument parsing, logging configuration, command validation, and the execution of the documentation generation pipeline.
 
 ## Collaboration Points
-- **Integration with Pipeline**: The CLI interacts with the `Pipeline` class, passing configuration settings derived from user inputs to initiate the documentation generation process.
-- **Logging and Monitoring**: The logging configuration established in this component is crucial for tracking the execution flow and debugging issues during the pipeline's operation.
+- **Integration with Other Components**: This CLI component interacts with the configuration and pipeline modules, specifically through the `GenDocConfig` and `Pipeline` classes, which are responsible for managing the documentation generation process.
+- **User Feedback**: The CLI provides feedback to users based on their input, including error messages for invalid commands or arguments, enhancing the overall user experience.
 
 ## Implementation Notes
-- The `build_parser` function defines a set of positional and optional arguments, including `--repo`, `--out`, and various flags for enabling or disabling features like batching and reviewer support.
-- The `configure_logging` function accepts a logging level, defaulting to `INFO` if an invalid level is provided, ensuring that the application maintains a clear logging strategy.
-- The `main` function includes basic error handling for command validation, ensuring that only the supported command "run" is processed.
+- The `build_parser` function does not take any inputs and returns a configured `ArgumentParser`. It includes various command-line arguments such as `--repo`, `--out`, and logging options.
+- The `configure_logging` function modifies the global logging settings based on the provided logging level, defaulting to `INFO` for invalid inputs.
+- The `main` function validates the command input, ensuring that only the "run" command is accepted. It initializes the configuration and executes the pipeline for documentation generation.
 
 Important code excerpt from the `main` function:
 ```python
@@ -31,4 +31,4 @@ def main(argv: Optional[list[str]] = None) -> None:
     pipeline.run()
 ``` 
 
-This structure ensures that the CLI component is user-friendly, robust, and integrates seamlessly with the overall documentation generation pipeline.
+This structure ensures that the CLI is both functional and user-friendly, providing a solid foundation for the documentation generation process within the GenDoc project.

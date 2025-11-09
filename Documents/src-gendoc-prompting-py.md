@@ -1,50 +1,42 @@
 ## Overview
 
-The `PromptOrchestrator` component is a crucial part of the documentation generation pipeline, responsible for managing the workflow of prompts directed at an external language model. It ensures that user inputs and existing documentation are effectively utilized to generate high-quality summaries and refined documentation.
+The `prompting.py` component of the GenDoc project is responsible for generating and refining documentation for software projects. It leverages a structured approach to analyze code elements, extract relevant metadata, and interact with a language model to produce human-readable summaries and instructions. This component plays a crucial role in streamlining the documentation process, making it easier for developers to create and maintain clear and accessible documentation.
 
 ## Key Responsibilities
 
-- **Prompt Generation**: Creates prompts for summarizing, reviewing, synthesizing, and refining documentation based on user inputs and existing data.
-- **Logging Interactions**: Maintains a ledger of all interactions with the language model for traceability and auditing purposes.
-- **Output Integration**: Combines generated content into a structured format, ensuring consistency and clarity across documentation.
+- **Documentation Generation**: Create structured documentation that includes project goals, component breakdowns, and run instructions.
+- **Code Analysis**: Parse and analyze Python code to extract key components such as classes, functions, and methods, along with their associated metadata.
+- **User Interaction**: Provide a user-friendly interface for inputting prompts and receiving refined responses, while logging interactions for auditing and tracking.
+- **Error Handling**: Implement robust error handling to manage network issues, invalid prompts, and logging failures.
+- **Integration of Existing Documentation**: Incorporate existing documentation and code snippets to enhance the generated output.
 
 ## Collaboration Points
 
-- **External Language Model Client**: Interacts with the language model to generate responses based on formatted prompts.
-- **Prompt Ledger**: Logs prompts and responses to maintain a history of interactions, facilitating accountability.
-- **Prompt Templates**: Utilizes predefined templates to ensure uniformity in the generated documentation.
+- **LLMClient**: Utilized for generating responses based on user prompts.
+- **PromptLedger**: Logs interactions to maintain a record of prompts and responses for auditing purposes.
+- **PromptTemplates**: Formats prompts to ensure consistency and clarity in the generated documentation.
 
 ## Implementation Notes
 
-- **Input Validation**: Ensure that input types are valid, such as strings for prompts and dictionaries for metadata.
-- **Error Handling**: Implement robust error handling for potential JSON serialization errors, network issues, or invalid responses from the language model client.
-- **Fallback Mechanisms**: Provide default values or fallback options for missing or malformed input data.
+- The `MockLLM` class serves as a heuristic language model for offline development, providing methods to complete prompts based on user input and metadata.
+- The `PromptOrchestrator` class coordinates the workflow of prompts across various agents, ensuring that the documentation generation process is efficient and organized.
 
-### Important Code Path
+Key code excerpts illustrate the functionality:
 
-The `PromptOrchestrator` class initializes with essential components and manages the summarization of code elements:
+```python
+class MockLLM:
+    """Heuristic LLM used for offline development."""
+
+    def complete(self, *, system_prompt: str, user_prompt: str, metadata: Optional[Dict[str, object]] = None) -> str:
+        # Implementation details...
+```
 
 ```python
 class PromptOrchestrator:
     """Coordinates the prompt workflow across agents."""
 
     def __init__(self, client: LLMClient, ledger: PromptLedger, templates: PromptTemplates) -> None:
-        self._client = client
-        self._ledger = ledger
-        self._templates = templates
-
-    def summarize_element(
-        self,
-        *,
-        element_source: str,
-        metadata: Dict[str, object],
-        supplemental_text: Optional[str] = None,
-    ) -> str:
-        supplemental_block = (
-            f"\n\nExisting documentation excerpts:\n{supplemental_text}"
-            if supplemental_text
-            else ""
-        )
+        # Initialization details...
 ```
 
-This snippet highlights the initialization and summarization process, showcasing how the component integrates with other parts of the pipeline.
+This component is designed to ensure that the documentation process is not only streamlined but also robust, providing meaningful feedback and maintaining the integrity of the generated documentation.

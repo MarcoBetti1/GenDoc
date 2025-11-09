@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -79,6 +80,22 @@ class Pipeline:
         run_section = self._generate_run_section(existing_docs=existing_docs, goal=project_goal)
         if run_section:
             document_text = self._insert_run_section(document_text, run_section)
+        repo_layout_section = self._generate_repository_layout_section(goal=project_goal)
+        if repo_layout_section:
+            document_text = self._upsert_section(
+                document_text=document_text,
+                section_text=repo_layout_section,
+                heading="Repository Layout",
+                anchor_candidates=["To Run", "Functional Flow", "At a Glance"],
+            )
+        cli_reference_section = self._generate_cli_reference_section(goal=project_goal)
+        if cli_reference_section:
+            document_text = self._upsert_section(
+                document_text=document_text,
+                section_text=cli_reference_section,
+                heading="CLI Reference",
+                anchor_candidates=["Repository Layout", "To Run", "Functional Flow"],
+            )
         component_docs = self._generate_component_documents(
             element_sections=element_sections,
             goal=project_goal,
@@ -88,6 +105,7 @@ class Pipeline:
                 document_text=document_text,
                 component_docs=component_docs,
             )
+        document_text = self._generalize_document_text(document_text)
         self._write_output(document_text)
 
         summary = RunSummary(
@@ -266,6 +284,7 @@ class Pipeline:
             polished = self._strip_wrapping_code_fence(polished)
             if not polished:
                 continue
+            polished = self._generalize_document_text(polished)
             slug_base = self._slugify_component(component_key)
             count = slug_counts.get(slug_base, 0)
             slug_counts[slug_base] = count + 1
@@ -453,6 +472,8 @@ class Pipeline:
             excerpt = (content or "").strip()
             if not excerpt:
                 return
+            if "llmchess" in excerpt.lower():
+                return
             entries.append({"path": key, "excerpt": excerpt[:4000]})
             seen.add(key)
 
@@ -487,6 +508,104 @@ class Pipeline:
             except OSError as exc:  # pragma: no cover - filesystem guard
                 logger.debug("Failed to read source context %s: %s", source_path, exc)
         return entries
+
+    def _generate_repository_layout_section(self, *, goal: str) -> str:
+        snapshot = self._collect_repo_layout_snapshot()
+        if not snapshot.strip():
+            return ""
+        try:
+            section = self._orchestrator.describe_repo_layout(goal=goal, snapshot=snapshot)
+        except Exception as exc:  # pragma: no cover - resilience guard
+            logger.warning("Failed to document repository layout: %s", exc)
+            return ""
+        return section.strip()
+
+    def _collect_repo_layout_snapshot(self) -> str:
+        repo_root = self._config.repo_path
+        if not repo_root.exists():
+            return ""
+        try:
+            entries = sorted(
+                [entry for entry in repo_root.iterdir() if not self._should_skip_layout_entry(entry)],
+                key=lambda path: (not path.is_dir(), path.name.lower()),
+            )
+        except OSError as exc:  # pragma: no cover - filesystem guard
+            logger.debug("Failed to list repository entries: %s", exc)
+            return ""
+        display_limit = 12
+        lines: list[str] = []
+        for entry in entries[:display_limit]:
+            if entry.is_dir():
+                lines.append(f"{entry.name}/")
+                for child in self._collect_directory_children(entry):
+                    lines.append(f"  - {child}")
+            else:
+                lines.append(entry.name)
+        return "\n".join(lines)
+
+    def _collect_directory_children(self, directory: Path, *, limit: int = 5) -> List[str]:
+        try:
+            children = sorted(
+                [child for child in directory.iterdir() if not self._should_skip_layout_entry(child)],
+                key=lambda path: (not path.is_dir(), path.name.lower()),
+            )
+        except OSError as exc:  # pragma: no cover - filesystem guard
+            logger.debug("Failed to list directory %s: %s", directory, exc)
+            return []
+        entries: list[str] = []
+        for child in children[:limit]:
+            suffix = "/" if child.is_dir() else ""
+            entries.append(f"{child.name}{suffix}")
+        if len(children) > limit:
+            entries.append("…")
+        return entries
+
+    def _should_skip_layout_entry(self, path: Path) -> bool:
+        name = path.name
+        lowered = name.lower()
+        if name.startswith('.') and lowered not in {'.env'}:
+            return True
+        if lowered in {"__pycache__", "venv", ".venv", "env", "build", "dist"}:
+            return True
+        if lowered.endswith(":$py.class"):
+            return True
+        if lowered.endswith(".pyc"):
+            return True
+        if lowered.endswith(".egg-info"):
+            return True
+        return False
+
+    def _generate_cli_reference_section(self, *, goal: str) -> str:
+        cli_source = self._extract_cli_source_snippet()
+        if not cli_source.strip():
+            return ""
+        try:
+            section = self._orchestrator.describe_cli_reference(goal=goal, cli_source=cli_source)
+        except Exception as exc:  # pragma: no cover - resilience guard
+            logger.warning("Failed to document CLI flags: %s", exc)
+            return ""
+        return section.strip()
+
+    def _extract_cli_source_snippet(self) -> str:
+        cli_path = self._config.repo_path / "src" / "gendoc" / "cli.py"
+        if not cli_path.exists():
+            return ""
+        try:
+            source = cli_path.read_text(encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - filesystem guard
+            logger.debug("Failed to read CLI source %s: %s", cli_path, exc)
+            return ""
+        try:
+            module = ast.parse(source)
+        except SyntaxError:
+            return source
+        lines = source.splitlines()
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "build_parser":
+                start = max(node.lineno - 1, 0)
+                end = node.end_lineno or node.lineno
+                return "\n".join(lines[start:end])
+        return source
 
     def _augment_component_breakdown(
         self,
@@ -552,6 +671,50 @@ class Pipeline:
         augmented = self._augment_component_breakdown(section_text=section_text, component_docs=component_docs)
         start, end = match.span(0)
         return f"{document_text[:start]}{augmented}{document_text[end:]}"
+
+    def _upsert_section(
+        self,
+        *,
+        document_text: str,
+        section_text: str,
+        heading: str,
+        anchor_candidates: List[str],
+    ) -> str:
+        if not section_text.strip():
+            return document_text
+        root = document_text
+        target_pattern = re.compile(rf"^##\s+{re.escape(heading)}.*?(?=^##\s+|\Z)", re.MULTILINE | re.DOTALL)
+        root = target_pattern.sub("", root).strip("\n")
+        insert_pos = len(root)
+        for anchor in anchor_candidates:
+            anchor_pattern = re.compile(rf"^##\s+{re.escape(anchor)}.*?(?=^##\s+|\Z)", re.MULTILINE | re.DOTALL)
+            anchor_match = anchor_pattern.search(root)
+            if anchor_match:
+                insert_pos = anchor_match.end()
+                break
+        before = root[:insert_pos].rstrip("\n")
+        after = root[insert_pos:].lstrip("\n")
+        pieces: list[str] = []
+        if before:
+            pieces.append(before)
+        pieces.append(section_text.strip())
+        if after:
+            pieces.append(after)
+        combined = "\n\n".join(piece for piece in pieces if piece)
+        return combined.strip("\n") + "\n"
+
+    def _generalize_document_text(self, document_text: str) -> str:
+        text = document_text
+        replacements = [
+            (re.compile(r"(?i)samples/llmchess"), "samples/example_repo"),
+            (re.compile(r"(?i)samples\\\\llmchess"), r"samples\\example_repo"),
+            (re.compile(r"(?i)`llmchess`"), "`example_repo`"),
+            (re.compile(r"(?i)llmchess"), "example_repo"),
+        ]
+        for pattern, replacement in replacements:
+            text = pattern.sub(replacement, text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
         if result_lines and result_lines[-1].strip():
             result_lines.append("")
