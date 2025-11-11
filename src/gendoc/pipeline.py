@@ -12,6 +12,7 @@ from .analysis import CodeElement, ProjectAnalyzer, ProjectStructure
 from .config import GenDocConfig, RunContext
 from .existing_docs import ExistingDocsCollector
 from .prompting import DEFAULT_TEMPLATES, MockLLM, OpenAIClient, PromptLedger, PromptOrchestrator
+from .sections import generate_to_run_section
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ class ComponentDocument:
 class Pipeline:
     """Coordinates the end-to-end documentation workflow."""
 
+    _SUPPORTED_SECTIONS = {"to_run"}
+
     def __init__(self, config: GenDocConfig) -> None:
         self._config = config
         self._context = RunContext(config=config)
@@ -67,7 +70,12 @@ class Pipeline:
         return PromptOrchestrator(client=client, ledger=self._ledger, templates=DEFAULT_TEMPLATES)
 
     def run(self) -> RunSummary:
-        logger.info("Starting GenDoc pipeline")
+        requested = self._requested_sections()
+        mode_suffix = f" (sections: {', '.join(sorted(requested))})" if requested else ""
+        logger.info("Starting GenDoc pipeline%s", mode_suffix)
+        if requested == {"to_run"}:
+            return self._run_to_run_only()
+
         structure = self._analyzer.analyze()
         existing_docs = self._docs_collector.collect() if self._config.use_existing_docs else {}
         element_sections = self._document_elements(structure.elements, existing_docs)
@@ -77,7 +85,12 @@ class Pipeline:
             refined_sections = element_sections
         cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
         document_text = self._compose_document(structure, refined_sections, project_goal)
-        run_section = self._generate_run_section(existing_docs=existing_docs, goal=project_goal)
+        run_section = generate_to_run_section(
+            config=self._config,
+            orchestrator=self._orchestrator,
+            existing_docs=existing_docs,
+            goal=project_goal,
+        )
         if run_section:
             document_text = self._insert_run_section(document_text, run_section)
         repo_layout_section = self._generate_repository_layout_section(goal=project_goal)
@@ -119,6 +132,51 @@ class Pipeline:
             component_documents=[doc.path for doc in component_docs],
         )
         logger.info("GenDoc pipeline finished: %d elements", summary.element_count)
+        return summary
+
+    def _requested_sections(self) -> set[str]:
+        if not self._config.sections:
+            return set()
+        normalized: set[str] = set()
+        for raw in self._config.sections:
+            name = raw.strip().lower().replace("-", "_")
+            if not name:
+                continue
+            if name not in self._SUPPORTED_SECTIONS:
+                raise ValueError(f"Unknown section '{raw}'. Supported sections: {sorted(self._SUPPORTED_SECTIONS)}")
+            normalized.add(name)
+        return normalized
+
+    def _run_to_run_only(self) -> RunSummary:
+        existing_docs = self._docs_collector.collect() if self._config.use_existing_docs else {}
+        goal = "To Run only mode: generate quickstart instructions."
+        run_section = generate_to_run_section(
+            config=self._config,
+            orchestrator=self._orchestrator,
+            existing_docs=existing_docs,
+            goal=goal,
+        ).strip()
+
+        if not run_section:
+            run_section = "## To Run\n\nRun instructions unavailable."
+        elif not run_section.lower().startswith("## to run"):
+            run_section = f"## To Run\n\n{run_section}"
+
+        run_section = self._generalize_document_text(run_section)
+        self._write_output(run_section)
+        cross_reference_path = self._write_cross_reference(existing_docs, [], goal)
+
+        summary = RunSummary(
+            sections=[],
+            element_count=0,
+            existing_doc_count=len(existing_docs),
+            ledger_path=self._config.ledger_path or (self._config.output_path.parent / "prompt-ledger.jsonl"),
+            cross_reference_path=cross_reference_path,
+            document_path=self._config.output_path,
+            project_goal=goal,
+            component_documents=[],
+        )
+        logger.info("Generated To Run section only")
         return summary
 
     def _document_elements(self, elements: List[CodeElement], existing_docs: Dict[Path, str]) -> List[Section]:
@@ -394,29 +452,6 @@ class Pipeline:
         body = fence_match.group("body").rstrip()
         return body or stripped
 
-    def _generate_run_section(self, *, existing_docs: Dict[Path, str], goal: str) -> str:
-        context_entries = self._build_run_context(existing_docs)
-        if not context_entries:
-            return ""
-        try:
-            draft = self._orchestrator.collect_run_steps(goal=goal, context_entries=context_entries)
-        except Exception as exc:  # pragma: no cover - resilience guard
-            logger.warning("Failed to draft run instructions: %s", exc)
-            return ""
-        sanitized = draft.strip()
-        try:
-            parsed = json.loads(sanitized)
-        except json.JSONDecodeError:
-            normalized = sanitized
-        else:
-            normalized = json.dumps(parsed, ensure_ascii=False, indent=2)
-        try:
-            refined = self._orchestrator.refine_run_steps(goal=goal, draft=normalized)
-        except Exception as exc:  # pragma: no cover - resilience guard
-            logger.warning("Failed to refine run instructions: %s", exc)
-            return ""
-        return refined.strip()
-
     def _insert_run_section(self, document_text: str, run_section: str) -> str:
         cleaned_section = run_section.strip()
         if not cleaned_section:
@@ -455,59 +490,6 @@ class Pipeline:
             segments.append(after)
 
         return "\n\n".join(segments).strip("\n") + "\n"
-
-    def _build_run_context(self, existing_docs: Dict[Path, str]) -> List[Dict[str, str]]:
-        repo_root = self._config.repo_path
-        entries: list[dict[str, str]] = []
-        seen: set[str] = set()
-
-        def add_entry(path: Path, content: str) -> None:
-            try:
-                relative = path.relative_to(repo_root)
-            except ValueError:
-                relative = path
-            key = str(relative).replace("\\", "/")
-            if key in seen:
-                return
-            excerpt = (content or "").strip()
-            if not excerpt:
-                return
-            if "llmchess" in excerpt.lower():
-                return
-            entries.append({"path": key, "excerpt": excerpt[:4000]})
-            seen.add(key)
-
-        doc_keywords = ("readme", "usage", "getting-started", "setup", "install", "run", "quickstart")
-        for path, content in existing_docs.items():
-            name = path.name.lower()
-            if any(keyword in name for keyword in doc_keywords):
-                add_entry(path, content)
-
-        fallback_docs = [
-            repo_root / "README.md",
-            repo_root / "docs" / "README.md",
-            repo_root / "samples" / "demo_app" / "README.md",
-        ]
-        for doc_path in fallback_docs:
-            if not doc_path.exists():
-                continue
-            try:
-                add_entry(doc_path, doc_path.read_text(encoding="utf-8"))
-            except OSError as exc:  # pragma: no cover - filesystem guard
-                logger.debug("Failed to read fallback doc %s: %s", doc_path, exc)
-
-        source_paths = [
-            repo_root / "pyproject.toml",
-            repo_root / "src" / "gendoc" / "cli.py",
-        ]
-        for source_path in source_paths:
-            if not source_path.exists():
-                continue
-            try:
-                add_entry(source_path, source_path.read_text(encoding="utf-8"))
-            except OSError as exc:  # pragma: no cover - filesystem guard
-                logger.debug("Failed to read source context %s: %s", source_path, exc)
-        return entries
 
     def _generate_repository_layout_section(self, *, goal: str) -> str:
         snapshot = self._collect_repo_layout_snapshot()

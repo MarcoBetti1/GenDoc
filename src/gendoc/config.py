@@ -19,12 +19,14 @@ class GenDocConfig:
     max_chunk_tokens: int = 1800
     ledger_path: Optional[Path] = None
     project_tree_prompt_tokens: int = 2000
+    sections: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_args(cls, args: "argparse.Namespace") -> "GenDocConfig":
         repo_path = Path(args.repo).expanduser().resolve()
         output_path = Path(args.out).expanduser().resolve()
         ledger_path = Path(args.ledger).expanduser().resolve() if args.ledger else None
+        sections = tuple(str(section).strip() for section in (args.sections or []) if section)
 
         config = cls(
             repo_path=repo_path,
@@ -35,6 +37,7 @@ class GenDocConfig:
             llm_provider=args.llm_provider,
             max_chunk_tokens=args.max_chunk_tokens,
             ledger_path=ledger_path,
+            sections=sections,
         )
         config.validate()
         return config

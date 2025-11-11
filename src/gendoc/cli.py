@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llm-provider", choices=["mock", "openai"], default="mock", help="LLM backend to use.")
     parser.add_argument("--max-chunk-tokens", type=int, default=1800, help="Maximum token budget per code chunk.")
     parser.add_argument("--ledger", help="Optional path for the prompt ledger JSONL file.")
+    parser.add_argument(
+        "--sections",
+        nargs="+",
+        help="Limit generation to specific sections (e.g. to_run). Defaults to the full pipeline.",
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level (DEBUG, INFO, WARNING).")
     return parser
 

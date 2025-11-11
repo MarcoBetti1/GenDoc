@@ -52,6 +52,4 @@ GenDoc/
 ## Next Steps
 - Config file (diff llms per diff functions)
 - Token limit
-- include comprehensive ToRun section in Readme (windows + mac)
-- combine component deep dives into component breakdown section
-- separate bug identification process and make it robust
+- Run with certain settings: Separate functionalities.
