@@ -14,3 +14,5 @@ src/gendoc.egg-info/dependency_links.txt
 src/gendoc.egg-info/entry_points.txt
 src/gendoc.egg-info/requires.txt
 src/gendoc.egg-info/top_level.txt
+src/gendoc/sections/__init__.py
+src/gendoc/sections/run.py

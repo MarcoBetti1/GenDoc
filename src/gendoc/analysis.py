@@ -61,7 +61,7 @@ class ProjectAnalyzer:
         )
 
     def _discover_python_files(self, root: Path) -> List[Path]:
-        ignore_dirs = {".git", "venv", "__pycache__", ".mypy_cache"}
+        ignore_dirs = set(self._config.analyzer_settings.ignore_dirs)
         files: list[Path] = []
         for path in root.rglob("*.py"):
             if any(part in ignore_dirs for part in path.parts):

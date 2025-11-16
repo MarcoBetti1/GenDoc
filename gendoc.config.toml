@@ -1,0 +1,59 @@
+[paths]
+repo = "samples/demo_app"
+output = "docs/generated/output.md"
+ledger = "docs/generated/prompt-ledger.jsonl"
+
+[pipeline]
+use_existing_docs = true
+enable_batching = false
+enable_reviewer = true
+max_chunk_tokens = 1800
+sections = []
+project_tree_prompt_tokens = 2000
+
+[llm]
+provider = "mock"
+default_model = "gpt-4o-mini"
+temperature = 0.0
+max_output_tokens = 1200
+timeout_seconds = 60
+max_retries = 3
+
+[llm.stage_models]
+# stage_name = "model"
+document = "gpt-4o-mini"
+goal = "gpt-4o-mini"
+
+[llm.stage_temperatures]
+# stage_name = temperature
+component_polish = 0.3
+
+[analysis]
+ignore_dirs = [".git", "venv", "__pycache__", ".mypy_cache"]
+
+[existing_docs]
+extensions = [".md", ".rst", ".txt"]
+exclude = ["generated"]
+max_excerpt_chars = 1200
+
+[run_section]
+enabled = true
+max_context_entries = 12
+max_excerpt_chars = 4000
+doc_keywords = ["readme", "getting-started", "setup", "usage", "install"]
+fallback_docs = ["README.md", "docs/README.md", "samples/demo_app/README.md"]
+source_paths = ["pyproject.toml", "src/gendoc/cli.py"]
+
+[features]
+include_run_section = true
+include_repo_layout = true
+include_cli_reference = true
+include_component_docs = true
+generalize_document_text = true
+component_doc_limit = 50
+
+[output]
+cross_reference_filename = "cross-reference.json"
+artefacts_dir_name = "artefacts"
+component_dir_suffix = "_components"
+default_ledger_filename = "prompt-ledger.jsonl"

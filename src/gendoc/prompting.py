@@ -5,6 +5,7 @@ import importlib
 import json
 import logging
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -16,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, Dict, Iterable, List, Optional, Protocol
+
+from .config import LLMSettings
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +55,33 @@ class PromptLedger:
 
 
 class LLMClient(Protocol):
-    def complete(self, *, system_prompt: str, user_prompt: str, metadata: Optional[Dict[str, object]] = None) -> str:
+    def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        metadata: Optional[Dict[str, object]] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
         ...
 
 
 class MockLLM:
     """Heuristic LLM used for offline development."""
 
-    def complete(self, *, system_prompt: str, user_prompt: str, metadata: Optional[Dict[str, object]] = None) -> str:  # noqa: D401
+    def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        metadata: Optional[Dict[str, object]] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+    ) -> str:  # noqa: D401
         _ = system_prompt
+        _ = model
+        _ = temperature
         metadata = metadata or {}
 
         identifier = metadata.get("identifier") or self._extract_identifier(user_prompt) or "section"
@@ -665,7 +686,15 @@ class MockLLM:
 class OpenAIClient:
     """Thin wrapper around the OpenAI Chat Completions API."""
 
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    def __init__(
+        self,
+        *,
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.0,
+        max_output_tokens: Optional[int] = None,
+        timeout_seconds: int = 60,
+        max_retries: int = 3,
+    ) -> None:
         try:
             openai = importlib.import_module("openai")
         except ModuleNotFoundError as exc:  # pragma: no cover - import guard
@@ -676,18 +705,50 @@ class OpenAIClient:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         self._client: Any = openai.OpenAI(api_key=api_key)
-        self._model = model
+        self._default_model = model
+        self._default_temperature = temperature
+        self._max_output_tokens = max_output_tokens
+        self._timeout_seconds = timeout_seconds
+        self._max_retries = max(0, max_retries)
 
-    def complete(self, *, system_prompt: str, user_prompt: str, metadata: Optional[Dict[str, object]] = None) -> str:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-        )
-        return response.choices[0].message.content or ""
+    def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        metadata: Optional[Dict[str, object]] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        target_model = model or self._default_model
+        target_temperature = self._default_temperature if temperature is None else temperature
+        attempt = 0
+        last_error: Optional[Exception] = None
+        while attempt <= self._max_retries:
+            try:
+                client = self._client
+                if self._timeout_seconds:
+                    client = client.with_options(timeout=self._timeout_seconds)
+                kwargs: dict[str, Any] = {
+                    "model": target_model,
+                    "messages": messages,
+                    "temperature": target_temperature,
+                }
+                if self._max_output_tokens is not None:
+                    kwargs["max_tokens"] = self._max_output_tokens
+                response = client.chat.completions.create(**kwargs)
+                return response.choices[0].message.content or ""
+            except Exception as exc:  # pragma: no cover - network guard
+                last_error = exc
+                attempt += 1
+                if attempt > self._max_retries:
+                    raise
+                time.sleep(min(2**attempt, 10))
+        raise RuntimeError("OpenAI completion failed") from last_error
 
 
 @dataclass(slots=True)
@@ -723,10 +784,39 @@ class PromptTemplates:
 class PromptOrchestrator:
     """Coordinates the prompt workflow across agents."""
 
-    def __init__(self, client: LLMClient, ledger: PromptLedger, templates: PromptTemplates) -> None:
+    def __init__(
+        self,
+        *,
+        client: LLMClient,
+        ledger: PromptLedger,
+        templates: PromptTemplates,
+        llm_settings: Optional[LLMSettings] = None,
+    ) -> None:
         self._client = client
         self._ledger = ledger
         self._templates = templates
+        self._llm_settings = llm_settings
+
+    def _call_llm(
+        self,
+        *,
+        stage: str,
+        system_prompt: str,
+        user_prompt: str,
+        metadata: Optional[Dict[str, object]] = None,
+    ) -> str:
+        model = None
+        temperature = None
+        if self._llm_settings:
+            model = self._llm_settings.model_for(stage)
+            temperature = self._llm_settings.temperature_for(stage)
+        return self._client.complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            metadata=metadata,
+            model=model,
+            temperature=temperature,
+        )
 
     def summarize_element(
         self,
@@ -745,7 +835,8 @@ class PromptOrchestrator:
             metadata=json.dumps(metadata, ensure_ascii=False),
             supplemental=supplemental_block,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="element",
             system_prompt=self._templates.system_analyst,
             user_prompt=prompt,
             metadata={
@@ -787,7 +878,8 @@ class PromptOrchestrator:
             metadata=json.dumps(metadata, ensure_ascii=False),
             supplemental=supplemental_block,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="review",
             system_prompt=self._templates.system_reviewer,
             user_prompt=prompt,
             metadata={
@@ -815,7 +907,12 @@ class PromptOrchestrator:
     def synthesize(self, *, summaries: Iterable[str], metadata: Dict[str, object]) -> str:
         joined = "\n".join(summaries)
         prompt = self._templates.prompt_synthesizer.format(summaries=joined, metadata=json.dumps(metadata, ensure_ascii=False))
-        response = self._client.complete(system_prompt=self._templates.system_synthesizer, user_prompt=prompt, metadata={"stage": "synthesis"})
+        response = self._call_llm(
+            stage="synthesis",
+            system_prompt=self._templates.system_synthesizer,
+            user_prompt=prompt,
+            metadata={"stage": "synthesis"},
+        )
         self._ledger.log(
             PromptRecord(
                 role="synthesizer",
@@ -830,7 +927,8 @@ class PromptOrchestrator:
     def derive_project_goal(self, *, section_summaries: Iterable[str]) -> str:
         joined = "\n".join(section_summaries)
         prompt = self._templates.prompt_goal.format(summaries=joined)
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="goal",
             system_prompt=self._templates.system_goal,
             user_prompt=prompt,
             metadata={"stage": "goal"},
@@ -852,7 +950,8 @@ class PromptOrchestrator:
             section=section_body,
             metadata=json.dumps(metadata, ensure_ascii=False),
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="refine",
             system_prompt=self._templates.system_filter,
             user_prompt=prompt,
             metadata={"stage": "refine", "identifier": metadata.get("identifier")},
@@ -882,7 +981,8 @@ class PromptOrchestrator:
             tree=project_tree.strip() or "(structure unavailable)",
             sections=json.dumps(section_payload, ensure_ascii=False, indent=2),
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="document",
             system_prompt=self._templates.system_document,
             user_prompt=prompt,
             metadata={"stage": "document"},
@@ -908,7 +1008,8 @@ class PromptOrchestrator:
             goal=goal,
             context=json.dumps(context_entries, ensure_ascii=False, indent=2),
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="run_collect",
             system_prompt=self._templates.system_run_collector,
             user_prompt=prompt,
             metadata={"stage": "run_collect"},
@@ -934,7 +1035,8 @@ class PromptOrchestrator:
             goal=goal,
             draft=draft,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="run_refine",
             system_prompt=self._templates.system_run_refiner,
             user_prompt=prompt,
             metadata={"stage": "run_refine"},
@@ -960,7 +1062,8 @@ class PromptOrchestrator:
             goal=goal,
             snapshot=snapshot,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="repo_layout",
             system_prompt=self._templates.system_repo_layout,
             user_prompt=prompt,
             metadata={"stage": "repo_layout"},
@@ -986,7 +1089,8 @@ class PromptOrchestrator:
             goal=goal,
             cli_source=cli_source,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="cli_reference",
             system_prompt=self._templates.system_cli_reference,
             user_prompt=prompt,
             metadata={"stage": "cli_reference"},
@@ -1014,7 +1118,8 @@ class PromptOrchestrator:
             component=component_name,
             raw_notes=raw_notes,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="component_prune",
             system_prompt=self._templates.system_component_prune,
             user_prompt=prompt,
             metadata={"stage": "component_prune", "component": component_name},
@@ -1067,7 +1172,8 @@ class PromptOrchestrator:
             condensed=condensed_notes,
             snippet_block=snippet_block,
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="component_polish",
             system_prompt=self._templates.system_component_polish,
             user_prompt=prompt,
             metadata={"stage": "component_polish", "component": component_name},
@@ -1099,7 +1205,8 @@ class PromptOrchestrator:
             document=base_document,
             components=json.dumps(component_payload, ensure_ascii=False, indent=2),
         )
-        response = self._client.complete(
+        response = self._call_llm(
+            stage="document_integrator",
             system_prompt=self._templates.system_document_integrator,
             user_prompt=prompt,
             metadata={"stage": "document_integrator"},

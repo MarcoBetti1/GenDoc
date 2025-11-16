@@ -11,7 +11,7 @@ The `src/gendoc/cli.py` component serves as the command-line interface (CLI) for
 - **User Feedback**: The CLI provides feedback to users based on their input, including error messages for invalid commands or arguments, enhancing the overall user experience.
 
 ## Implementation Notes
-- The `build_parser` function does not take any inputs and returns a configured `ArgumentParser`. It includes various command-line arguments such as `--repo`, `--out`, and logging options.
+- The `build_parser` function does not take any inputs and returns a configured `ArgumentParser`. Beyond the standard `--repo` and `--out` flags, it now exposes `--config` (path to a TOML config), `--llm-model` (per-run model override), and paired toggles such as `--use-existing-docs` / `--no-existing-docs` so users can temporarily override the file-backed defaults.
 - The `configure_logging` function modifies the global logging settings based on the provided logging level, defaulting to `INFO` for invalid inputs.
 - The `main` function validates the command input, ensuring that only the "run" command is accepted. It initializes the configuration and executes the pipeline for documentation generation.
 

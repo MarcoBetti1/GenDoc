@@ -74,16 +74,16 @@ GenDoc orchestrates a multi-pass documentation workflow composed of five core su
 All prompts must carry a `role` tag (`analyst`, `reviewer`, `synthesizer`, etc.) to aid audit trails and future fine-tuning.
 
 ## Configuration Surface (`GenDocConfig`)
-- `repo_path`: Path to target repository.
-- `output_path`: Destination Markdown file.
-- `use_existing_docs`: Toggle supplemental doc ingestion.
-- `enable_batching`: Allow batching of independent prompts.
-- `enable_reviewer`: Activate reviewer agent loops.
-- `llm_provider`: `mock` (default) or `openai`.
-- `max_chunk_tokens`: Token budget for element prompts.
-- `ledger_path`: Optional custom location for the prompt ledger.
+- **Paths**: default repo/output/ledger locations, plus artefact and component folder names.
+- **Pipeline flags**: `use_existing_docs`, batching/reviewer toggles, `max_chunk_tokens`, `project_tree_prompt_tokens`, and optional section filters.
+- **LLM settings**: provider, default model, temperature, retry policy, and per-stage overrides for both model selection and temperature.
+- **Feature toggles**: booleans for including the run guide, repo layout, CLI reference, component deep dives, and whether to generalize sample-specific terms. Includes a component doc limit.
+- **Analyzer settings**: directory ignore list consumed by the AST analyzer.
+- **Existing docs settings**: allowed file extensions, exclusion markers, and excerpt sizes when harvesting supplemental docs.
+- **Run section settings**: enablement, keyword filters, fallback doc paths, source snippets, and context caps powering the “To Run” section.
+- **Output settings**: cross-reference filename, artefact directory name, prompt ledger filename, and component doc suffix.
 
-Future options (not in v0.1):
+Future surface ideas:
 - `language_overrides`: Force specific analyzers per directory.
 - `quality_threshold`: Numeric grade to require before finalizing a summary.
 

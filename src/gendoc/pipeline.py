@@ -56,18 +56,31 @@ class Pipeline:
         self._context = RunContext(config=config)
         self._config.ensure_output_dirs()
         self._context.init_paths()
-        ledger_path = config.ledger_path or (config.output_path.parent / "prompt-ledger.jsonl")
+        ledger_path = config.ledger_path or (
+            config.output_path.parent / config.output_settings.default_ledger_filename
+        )
         self._ledger = PromptLedger(ledger_path)
         self._analyzer = ProjectAnalyzer(config)
-        self._docs_collector = ExistingDocsCollector(config.repo_path)
+        self._docs_collector = ExistingDocsCollector(config)
         self._orchestrator = self._build_orchestrator()
 
     def _build_orchestrator(self) -> PromptOrchestrator:
         if self._config.llm_provider == "openai":
-            client = OpenAIClient()
+            client = OpenAIClient(
+                model=self._config.llm_settings.default_model,
+                temperature=self._config.llm_settings.temperature,
+                max_output_tokens=self._config.llm_settings.max_output_tokens,
+                timeout_seconds=self._config.llm_settings.timeout_seconds,
+                max_retries=self._config.llm_settings.max_retries,
+            )
         else:
             client = MockLLM()
-        return PromptOrchestrator(client=client, ledger=self._ledger, templates=DEFAULT_TEMPLATES)
+        return PromptOrchestrator(
+            client=client,
+            ledger=self._ledger,
+            templates=DEFAULT_TEMPLATES,
+            llm_settings=self._config.llm_settings,
+        )
 
     def run(self) -> RunSummary:
         requested = self._requested_sections()
@@ -85,47 +98,62 @@ class Pipeline:
             refined_sections = element_sections
         cross_reference_path = self._write_cross_reference(existing_docs, refined_sections, project_goal)
         document_text = self._compose_document(structure, refined_sections, project_goal)
-        run_section = generate_to_run_section(
-            config=self._config,
-            orchestrator=self._orchestrator,
-            existing_docs=existing_docs,
-            goal=project_goal,
-        )
-        if run_section:
-            document_text = self._insert_run_section(document_text, run_section)
-        repo_layout_section = self._generate_repository_layout_section(goal=project_goal)
-        if repo_layout_section:
-            document_text = self._upsert_section(
-                document_text=document_text,
-                section_text=repo_layout_section,
-                heading="Repository Layout",
-                anchor_candidates=["To Run", "Functional Flow", "At a Glance"],
+        if self._config.feature_toggles.include_run_section and self._config.run_section_settings.enabled:
+            run_section = generate_to_run_section(
+                config=self._config,
+                orchestrator=self._orchestrator,
+                existing_docs=existing_docs,
+                goal=project_goal,
             )
-        cli_reference_section = self._generate_cli_reference_section(goal=project_goal)
-        if cli_reference_section:
-            document_text = self._upsert_section(
-                document_text=document_text,
-                section_text=cli_reference_section,
-                heading="CLI Reference",
-                anchor_candidates=["Repository Layout", "To Run", "Functional Flow"],
+            if run_section:
+                document_text = self._insert_run_section(document_text, run_section)
+
+        if self._config.feature_toggles.include_repo_layout:
+            repo_layout_section = self._generate_repository_layout_section(goal=project_goal)
+            if repo_layout_section:
+                document_text = self._upsert_section(
+                    document_text=document_text,
+                    section_text=repo_layout_section,
+                    heading="Repository Layout",
+                    anchor_candidates=["To Run", "Functional Flow", "At a Glance"],
+                )
+
+        if self._config.feature_toggles.include_cli_reference:
+            cli_reference_section = self._generate_cli_reference_section(goal=project_goal)
+            if cli_reference_section:
+                document_text = self._upsert_section(
+                    document_text=document_text,
+                    section_text=cli_reference_section,
+                    heading="CLI Reference",
+                    anchor_candidates=["Repository Layout", "To Run", "Functional Flow"],
+                )
+
+        component_docs: list[ComponentDocument] = []
+        if self._config.feature_toggles.include_component_docs:
+            component_docs = self._generate_component_documents(
+                element_sections=element_sections,
+                goal=project_goal,
             )
-        component_docs = self._generate_component_documents(
-            element_sections=element_sections,
-            goal=project_goal,
-        )
-        if component_docs:
-            document_text = self._integrate_component_docs(
-                document_text=document_text,
-                component_docs=component_docs,
-            )
-        document_text = self._generalize_document_text(document_text)
+            if component_docs:
+                document_text = self._integrate_component_docs(
+                    document_text=document_text,
+                    component_docs=component_docs,
+                )
+
+        if self._config.feature_toggles.generalize_document_text:
+            document_text = self._generalize_document_text(document_text)
         self._write_output(document_text)
 
         summary = RunSummary(
             sections=refined_sections,
             element_count=len(structure.elements),
             existing_doc_count=len(existing_docs),
-            ledger_path=self._config.ledger_path or (self._config.output_path.parent / "prompt-ledger.jsonl"),
+            ledger_path=(
+                self._config.ledger_path
+                or (
+                    self._config.output_path.parent / self._config.output_settings.default_ledger_filename
+                )
+            ),
             cross_reference_path=cross_reference_path,
             document_path=self._config.output_path,
             project_goal=project_goal,
@@ -162,7 +190,8 @@ class Pipeline:
         elif not run_section.lower().startswith("## to run"):
             run_section = f"## To Run\n\n{run_section}"
 
-        run_section = self._generalize_document_text(run_section)
+        if self._config.feature_toggles.generalize_document_text:
+            run_section = self._generalize_document_text(run_section)
         self._write_output(run_section)
         cross_reference_path = self._write_cross_reference(existing_docs, [], goal)
 
@@ -170,7 +199,12 @@ class Pipeline:
             sections=[],
             element_count=0,
             existing_doc_count=len(existing_docs),
-            ledger_path=self._config.ledger_path or (self._config.output_path.parent / "prompt-ledger.jsonl"),
+            ledger_path=(
+                self._config.ledger_path
+                or (
+                    self._config.output_path.parent / self._config.output_settings.default_ledger_filename
+                )
+            ),
             cross_reference_path=cross_reference_path,
             document_path=self._config.output_path,
             project_goal=goal,
@@ -227,12 +261,13 @@ class Pipeline:
         related: list[tuple[Path, str]] = []
         element_rel = element.file_path.relative_to(self._config.repo_path)
         element_parent = element_rel.parent
+        snippet_limit = max(1, self._config.existing_docs_settings.max_excerpt_chars)
         for path, content in existing_docs.items():
             rel_path = path.relative_to(self._config.repo_path)
             same_directory = rel_path.parent == element_parent
             name_matches = path.stem in element.identifier
             if same_directory or name_matches:
-                excerpt = content[:500]
+                excerpt = content[:snippet_limit]
                 related.append((path, excerpt))
         return related
 
@@ -271,7 +306,7 @@ class Pipeline:
         if existing_docs:
             cross_ref["_doc_sources"] = [str(path) for path in existing_docs.keys()]
         cross_ref["_project_goal"] = goal
-        output_path = self._config.output_path.parent / "cross-reference.json"
+        output_path = self._config.output_path.parent / self._config.output_settings.cross_reference_filename
         output_path.write_text(json.dumps(cross_ref, indent=2), encoding="utf-8")
         return output_path
 
@@ -303,7 +338,9 @@ class Pipeline:
     ) -> List[ComponentDocument]:
         if not element_sections:
             return []
-        component_dir = self._config.output_path.parent / f"{self._config.output_path.stem}_components"
+        component_dir = self._config.output_path.parent / (
+            f"{self._config.output_path.stem}{self._config.output_settings.component_dir_suffix}"
+        )
         component_dir.mkdir(parents=True, exist_ok=True)
         grouped: Dict[str, List[Section]] = {}
         for section in element_sections:
@@ -313,7 +350,10 @@ class Pipeline:
         generated: list[ComponentDocument] = []
         slug_counts: dict[str, int] = {}
         repo_name = self._config.repo_path.name
+        limit = max(0, self._config.feature_toggles.component_doc_limit)
         for component_key, sections in grouped.items():
+            if limit and len(generated) >= limit:
+                break
             raw_notes_parts = []
             identifiers: list[str] = []
             for section in sections:

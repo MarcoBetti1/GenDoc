@@ -48,10 +48,15 @@ def build_run_context(*, config: GenDocConfig, existing_docs: Dict[Path, str]) -
     """Collect candidate snippets that describe how to install or run the project."""
 
     repo_root = config.repo_path
+    settings = config.run_section_settings
     entries: list[dict[str, str]] = []
     seen: set[str] = set()
+    max_entries = max(0, settings.max_context_entries)
+    excerpt_limit = max(200, settings.max_excerpt_chars)
 
     def add_entry(path: Path, content: str) -> None:
+        if max_entries and len(entries) >= max_entries:
+            return
         try:
             relative = path.relative_to(repo_root)
         except ValueError:
@@ -64,20 +69,24 @@ def build_run_context(*, config: GenDocConfig, existing_docs: Dict[Path, str]) -
             return
         if "llmchess" in excerpt.lower():
             return
-        entries.append({"path": key, "excerpt": excerpt[:4000]})
+        entries.append({"path": key, "excerpt": excerpt[:excerpt_limit]})
         seen.add(key)
 
-    doc_keywords = ("readme", "usage", "getting-started", "setup", "install", "run", "quickstart")
+    doc_keywords = tuple(settings.doc_keywords) or (
+        "readme",
+        "usage",
+        "getting-started",
+        "setup",
+        "install",
+        "run",
+        "quickstart",
+    )
     for path, content in existing_docs.items():
         name = path.name.lower()
         if any(keyword in name for keyword in doc_keywords):
             add_entry(path, content)
 
-    fallback_docs = [
-        repo_root / "README.md",
-        repo_root / "docs" / "README.md",
-        repo_root / "samples" / "demo_app" / "README.md",
-    ]
+    fallback_docs = [repo_root / Path(doc_path) for doc_path in settings.fallback_docs]
     for doc_path in fallback_docs:
         if not doc_path.exists():
             continue
@@ -86,10 +95,7 @@ def build_run_context(*, config: GenDocConfig, existing_docs: Dict[Path, str]) -
         except OSError as exc:  # pragma: no cover - filesystem guard
             logger.debug("Failed to read fallback doc %s: %s", doc_path, exc)
 
-    source_paths = [
-        repo_root / "pyproject.toml",
-        repo_root / "src" / "gendoc" / "cli.py",
-    ]
+    source_paths = [repo_root / Path(source) for source in settings.source_paths]
     for source_path in source_paths:
         if not source_path.exists():
             continue
